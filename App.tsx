@@ -118,6 +118,7 @@ export default function App() {
   const [verificationToken, setVerificationToken] = useState('');
   const [dnsInstructions, setDnsInstructions] = useState<DNSInstruction[]>([]);
   const [connectedDomains, setConnectedDomains] = useState<any[]>([]);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   
   const [state, setState] = useState<AppState>({
     activeView: 'inbox',
@@ -261,6 +262,12 @@ export default function App() {
         verified: d.status === 'verified'
       })));
     }
+  };
+
+  const handleCopy = (text: string, index: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex(null), 2000);
   };
 
   const handleSaveSupabaseConfig = () => {
@@ -488,7 +495,7 @@ export default function App() {
     if (!supabase || !currentUser) return;
     
     try {
-      await supabase.from('email_accounts').insert({
+      const newAccount = {
         user_id: currentUser.id,
         email_address: accountForm.email,
         auth_token: accountForm.password,
@@ -497,9 +504,26 @@ export default function App() {
         protocol: 'imap',
         status: 'connected',
         last_sync_at: new Date().toISOString()
-      });
-      await fetchData(currentUser.id);
+      };
+
+      const { data, error } = await supabase.from('email_accounts').insert(newAccount).select().single();
       
+      if (error) throw error;
+      
+      // Update local state immediately to reflect the change
+      setState(prev => ({
+         ...prev,
+         accounts: [...prev.accounts, {
+            id: data.id,
+            email: data.email_address,
+            host: data.host,
+            port: data.port,
+            type: data.protocol,
+            lastSync: data.last_sync_at,
+            status: data.status
+         }]
+      }));
+
       setAccountStatus('success');
       setTimeout(() => {
         setShowAccountModal(false);
@@ -791,13 +815,37 @@ export default function App() {
         {domainModalStep === 'instructions' && (
           <div className="space-y-6">
             {dnsInstructions.map((dns, idx) => (
-              <div key={idx} className="p-4 rounded-xl bg-[#1a1a1a] border border-slate-800">
-                <Badge color="blue">{dns.type}</Badge>
-                <div className="mt-2 text-[10px] font-mono text-slate-400">NAME: {dns.name}</div>
-                <div className="text-[10px] font-mono text-slate-400 truncate">VALUE: {dns.content}</div>
+              <div key={idx} className="p-4 rounded-xl bg-[#1a1a1a] border border-slate-800 flex justify-between items-start group">
+                <div className="flex-1 min-w-0 pr-4">
+                  <Badge color="blue">{dns.type}</Badge>
+                  <div className="mt-2 text-[10px] font-mono text-slate-400">NAME: {dns.name}</div>
+                  <div className="text-[10px] font-mono text-slate-400 break-all">VALUE: {dns.content}</div>
+                </div>
+                <button 
+                  onClick={() => handleCopy(dns.content, idx)}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 transition-colors"
+                  title="Copy to clipboard"
+                >
+                  {copiedIndex === idx ? <Icons.CheckCircle className="w-4 h-4 text-emerald-500" /> : <Icons.Copy className="w-4 h-4" />}
+                </button>
               </div>
             ))}
-            <button onClick={() => handleVerifyDNS(false)} disabled={isVerifying} className="w-full py-4 bg-emerald-600 text-white rounded-xl font-bold">{isVerifying ? 'Verifying...' : 'Verify Records'}</button>
+            <div className="grid grid-cols-2 gap-4">
+              <button 
+                onClick={() => handleVerifyDNS(false)} 
+                disabled={isVerifying} 
+                className="w-full py-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-colors"
+              >
+                {isVerifying ? 'Checking...' : 'Re-check Status'}
+              </button>
+              <button 
+                onClick={() => handleVerifyDNS(false)} 
+                disabled={isVerifying} 
+                className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-colors"
+              >
+                Complete Setup
+              </button>
+            </div>
           </div>
         )}
       </Modal>
