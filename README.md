@@ -39,4 +39,15 @@ API_KEY=your_gemini_api_key_here
    - Enter your Supabase Anon Public Key.
 6. These credentials are saved locally to `localStorage` to connect the frontend to your database.
 
-### 4
+### 4. PWA Installation
+- **Chrome/Edge**: Look for the "Install NexusMail AI" icon in the address bar.
+- **Notifications**: When prompted, allow Notification permissions to receive desktop alerts for new emails.
+
+## 🏗 Architecture
+- **Frontend**: React 19 + TypeScript + Vite
+- **Styling**: Tailwind CSS
+- **Database**: Supabase (PostgreSQL + Auth)
+- **AI**: Google Gemini 3 Flash via `@google/genai` sdk
+
+## License
+© 2024 Global Nexus Systems

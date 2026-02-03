@@ -9,6 +9,7 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,6 +20,7 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
     
     setIsLoading(true);
     setError(null);
+    setMessage(null);
 
     try {
       if (isLogin) {
@@ -27,8 +29,9 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
           password,
         });
         if (error) throw error;
+        onLogin();
       } else {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
@@ -38,8 +41,17 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
           }
         });
         if (error) throw error;
+
+        // Check if session is missing (implies email verification is required)
+        if (data.user && !data.session) {
+          setMessage("Account created! Please check your email to confirm registration.");
+          setIsLogin(true); // Switch to login view
+          setIsLoading(false);
+          return;
+        }
+        
+        onLogin(); 
       }
-      onLogin(); // App.tsx will pick up the session change via onAuthStateChange, but we call this to be safe
     } catch (err: any) {
       setError(err.message || "Authentication failed");
     } finally {
@@ -91,6 +103,13 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
                 <p className="text-slate-400 text-sm">{isLogin ? 'Authenticate to access your neural dashboard.' : 'Deploy a new business logic instance.'}</p>
               </div>
               
+              {message && (
+                <div className="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 text-xs font-bold flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+                  {message}
+                </div>
+              )}
+
               {error && (
                 <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs font-bold">
                   {error}
@@ -138,7 +157,7 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
               </form>
 
               <div className="mt-8 text-center">
-                <button onClick={() => { setIsLogin(!isLogin); setError(null); }} className="text-sm text-slate-400 hover:text-white transition-colors">
+                <button onClick={() => { setIsLogin(!isLogin); setError(null); setMessage(null); }} className="text-sm text-slate-400 hover:text-white transition-colors">
                   {isLogin ? "Don't have an account? Deploy Node" : "Already verified? Sign In"}
                 </button>
               </div>
