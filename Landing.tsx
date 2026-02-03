@@ -1,21 +1,50 @@
 
 import React, { useState } from 'react';
 import { NexusLogoSVG } from './App';
+import { supabase } from './lib/supabase';
 
 export default function Landing({ onLogin }: { onLogin: () => void }) {
   const [isLogin, setIsLogin] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!supabase) {
+      setError("System database not connected. Please configure keys in dashboard.");
+      return;
+    }
+    
     setIsLoading(true);
-    // Simulate Auth Latency
-    setTimeout(() => {
+    setError(null);
+
+    try {
+      if (isLogin) {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              full_name: email.split('@')[0], // Default name
+            }
+          }
+        });
+        if (error) throw error;
+      }
+      onLogin(); // App.tsx will pick up the session change via onAuthStateChange, but we call this to be safe
+    } catch (err: any) {
+      setError(err.message || "Authentication failed");
+    } finally {
       setIsLoading(false);
-      onLogin();
-    }, 1500);
+    }
   };
 
   return (
@@ -29,12 +58,6 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
         <div className="flex items-center gap-3">
           <div className="w-8 h-8"><NexusLogoSVG /></div>
           <span className="font-bold tracking-tight text-xl">NexusMail AI</span>
-        </div>
-        <div className="hidden md:flex gap-8 text-sm font-medium text-slate-400">
-          <a href="#" className="hover:text-white transition-colors">Platform</a>
-          <a href="#" className="hover:text-white transition-colors">Solutions</a>
-          <a href="#" className="hover:text-white transition-colors">Enterprise</a>
-          <a href="#" className="hover:text-white transition-colors">Pricing</a>
         </div>
         <button onClick={() => setIsLogin(true)} className="px-5 py-2 rounded-full border border-white/10 hover:bg-white/10 transition-all text-sm font-bold">
           Client Portal
@@ -57,16 +80,6 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
             <p className="text-lg text-slate-400 max-w-lg leading-relaxed">
               NexusMail connects your custom domains to a Gemini 3 neural engine. We don't just host email; we extract tasks, automate support tickets, and execute business logic in real-time.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 pt-4">
-               <div className="flex items-center gap-2 px-6 py-4 rounded-2xl bg-white/5 border border-white/10">
-                 <svg className="w-5 h-5 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                 <span className="font-bold text-sm">Gemini 3 Native</span>
-               </div>
-               <div className="flex items-center gap-2 px-6 py-4 rounded-2xl bg-white/5 border border-white/10">
-                 <svg className="w-5 h-5 text-fuchsia-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                 <span className="font-bold text-sm">Enterprise Security</span>
-               </div>
-            </div>
           </div>
 
           {/* Login Card */}
@@ -77,6 +90,12 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
                 <h2 className="text-2xl font-bold mb-2">{isLogin ? 'Welcome back' : 'Initialize Node'}</h2>
                 <p className="text-slate-400 text-sm">{isLogin ? 'Authenticate to access your neural dashboard.' : 'Deploy a new business logic instance.'}</p>
               </div>
+              
+              {error && (
+                <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs font-bold">
+                  {error}
+                </div>
+              )}
 
               <form onSubmit={handleSubmit} className="space-y-5">
                 <div>
@@ -110,7 +129,7 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
                   {isLoading ? (
                     <div className="flex items-center justify-center gap-2">
                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                       <span>Authenticating...</span>
+                       <span>{isLogin ? 'Authenticating...' : 'Registering...'}</span>
                     </div>
                   ) : (
                     <span>{isLogin ? 'Access Dashboard' : 'Create Account'}</span>
@@ -119,7 +138,7 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
               </form>
 
               <div className="mt-8 text-center">
-                <button onClick={() => setIsLogin(!isLogin)} className="text-sm text-slate-400 hover:text-white transition-colors">
+                <button onClick={() => { setIsLogin(!isLogin); setError(null); }} className="text-sm text-slate-400 hover:text-white transition-colors">
                   {isLogin ? "Don't have an account? Deploy Node" : "Already verified? Sign In"}
                 </button>
               </div>

@@ -21,6 +21,7 @@ import {
 } from './constants';
 import { analyzeEmail, getDNSInstructions, draftReply, DNSInstruction } from './services/gemini';
 import Landing from './Landing';
+import { supabase, saveSupabaseConfig, getSupabaseConfig, clearSupabaseConfig } from './lib/supabase';
 
 // Branded Logo Component
 export const NexusLogoSVG = ({ className = "" }: { className?: string }) => (
@@ -128,12 +129,13 @@ const Modal = ({ isOpen, onClose, title, subtitle, children, isDarkMode }: { isO
 };
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem('nexus_auth') === 'true');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [inboxViewMode, setInboxViewMode] = useState<'list' | 'detail'>('list');
   
   // Modals & States
+  const [showSupabaseConfigModal, setShowSupabaseConfigModal] = useState(false);
   const [showDomainModal, setShowDomainModal] = useState(false);
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
@@ -141,6 +143,9 @@ export default function App() {
   const [showDraftModal, setShowDraftModal] = useState(false);
   const [showComposeModal, setShowComposeModal] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
+  
+  // Config Forms
+  const [sbConfig, setSbConfig] = useState({ url: '', key: '' });
 
   // Domain Modal
   const [domainModalStep, setDomainModalStep] = useState<'input' | 'scanning' | 'instructions'>('input');
@@ -149,24 +154,17 @@ export default function App() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [newDomainInput, setNewDomainInput] = useState('');
   const [dnsInstructions, setDnsInstructions] = useState<DNSInstruction[]>([]);
-  const [connectedDomains, setConnectedDomains] = useState(() => {
-    const saved = localStorage.getItem('nexus_domains');
-    return saved ? JSON.parse(saved) : [{ id: 'd1', name: 'nexus-biz.com', type: 'Primary Business Node', verified: true }];
-  });
+  const [connectedDomains, setConnectedDomains] = useState<any[]>([]);
   
-  const [state, setState] = useState<AppState>(() => {
-    const saved = localStorage.getItem('nexus_state');
-    const defaultState = {
-      activeView: 'inbox',
-      accounts: [],
-      emails: INITIAL_EMAILS,
-      tickets: INITIAL_TICKETS,
-      tasks: INITIAL_TASKS,
-      automations: INITIAL_AUTOMATIONS,
-      selectedEmailId: null,
-      isAnalyzing: false,
-    };
-    return saved ? { ...defaultState, ...JSON.parse(saved) } : defaultState as AppState;
+  const [state, setState] = useState<AppState>({
+    activeView: 'inbox',
+    accounts: [],
+    emails: [],
+    tickets: INITIAL_TICKETS,
+    tasks: INITIAL_TASKS,
+    automations: INITIAL_AUTOMATIONS,
+    selectedEmailId: null,
+    isAnalyzing: false,
   });
 
   const [draftContent, setDraftContent] = useState('');
@@ -176,25 +174,70 @@ export default function App() {
   const [accountForm, setAccountForm] = useState({ email: '', password: '', host: '', port: 993 });
   const [accountStatus, setAccountStatus] = useState<'idle' | 'auth' | 'success'>('idle');
 
-  // Persistence
+  // Initialization & Auth Listener
   useEffect(() => {
-    localStorage.setItem('nexus_state', JSON.stringify({
-      accounts: state.accounts, emails: state.emails, tickets: state.tickets, tasks: state.tasks, automations: state.automations
+    // 1. Check if Supabase is configured
+    const { url, key } = getSupabaseConfig();
+    if (!url || !key) {
+      setShowSupabaseConfigModal(true);
+      return;
+    }
+
+    if (!supabase) return;
+
+    // 2. Check Session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsAuthenticated(!!session);
+      if (session) fetchData(session.user.id);
+    });
+
+    // 3. Listen for changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(!!session);
+      if (session) fetchData(session.user.id);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchData = async (userId: string) => {
+    if (!supabase) return;
+
+    // Fetch Emails
+    const { data: emails } = await supabase.from('emails').select('*').order('received_at', { ascending: false });
+    // Fetch Domains
+    const { data: domains } = await supabase.from('domains').select('*');
+    // Fetch Tickets (optional for now, can use locals)
+    // Fetch Tasks (optional for now)
+
+    setState(prev => ({
+      ...prev,
+      emails: emails ? emails.map(e => ({
+        id: e.id,
+        from: e.from_address,
+        subject: e.subject,
+        content: e.body_text,
+        date: e.received_at,
+        isRead: e.is_read,
+        isAnalyzed: !!e.ai_summary,
+        aiInsights: e.ai_summary ? JSON.parse(e.ai_summary) : undefined
+      })) : INITIAL_EMAILS, // Fallback to initial if empty for demo
+      // accounts...
     }));
-  }, [state.accounts, state.emails, state.tickets, state.tasks, state.automations]);
-
-  useEffect(() => {
-    localStorage.setItem('nexus_domains', JSON.stringify(connectedDomains));
-  }, [connectedDomains]);
-
-  const handleLogin = () => {
-    localStorage.setItem('nexus_auth', 'true');
-    setIsAuthenticated(true);
+    
+    if (domains) {
+      setConnectedDomains(domains.map(d => ({
+        id: d.id,
+        name: d.domain_name,
+        type: d.provider === 'cloudflare' ? 'Cloudflare Sync' : 'Manual',
+        verified: d.status === 'verified'
+      })));
+    }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('nexus_auth');
-    setIsAuthenticated(false);
+  const handleSaveSupabaseConfig = () => {
+    saveSupabaseConfig(sbConfig.url, sbConfig.key);
+    window.location.reload(); // Reload to re-initialize the supabase client export
   };
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
@@ -207,13 +250,18 @@ export default function App() {
     state.emails.filter(e => !e.isRead).length
   , [state.emails]);
 
-  const selectEmail = (id: string) => {
+  const selectEmail = async (id: string) => {
     setState(p => ({ 
       ...p, 
       selectedEmailId: id, 
       emails: p.emails.map(e => e.id === id ? { ...e, isRead: true } : e) 
     }));
     setInboxViewMode('detail');
+    
+    // Update Read Status in DB
+    if(supabase) {
+       await supabase.from('emails').update({ is_read: true }).eq('id', id);
+    }
   };
 
   const handleAnalyzeEmail = async (emailId: string) => {
@@ -227,6 +275,13 @@ export default function App() {
         isAnalyzing: false,
         emails: prev.emails.map(e => e.id === emailId ? { ...e, isAnalyzed: true, aiInsights: insights } : e)
       }));
+      // Save analysis to DB
+      if (supabase) {
+        await supabase.from('emails').update({
+           ai_summary: JSON.stringify(insights),
+           ai_sentiment: insights.sentiment
+        }).eq('id', emailId);
+      }
     } catch (err) {
       setState(prev => ({ ...prev, isAnalyzing: false }));
       console.error(err);
@@ -251,10 +306,8 @@ export default function App() {
     if (!newDomainInput.includes('.')) return;
     setDomainModalStep('scanning');
     
-    // If Cloudflare selected, skip standard instructions and simulate API sync
     if (domainVerificationMethod === 'cloudflare') {
       setTimeout(() => {
-         // Mock Cloudflare verification success
          handleVerifyDNS(true);
       }, 3000);
       return;
@@ -271,8 +324,24 @@ export default function App() {
 
   const handleVerifyDNS = async (isCloudflare = false) => {
     setIsVerifying(true);
+    
+    // Save to Supabase
+    if (supabase) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase.from('domains').insert({
+          user_id: user.id,
+          domain_name: newDomainInput,
+          provider: isCloudflare ? 'cloudflare' : 'manual',
+          status: 'verified'
+        });
+      }
+    }
+
     await new Promise(r => setTimeout(r, 2000));
     setIsVerifying(false);
+    
+    // Refresh list locally (or re-fetch)
     setConnectedDomains(prev => [
       ...prev,
       { 
@@ -303,39 +372,19 @@ export default function App() {
       // Simulate network delay
       await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
 
-      // Simulate connection error randomly (e.g. 1 in 10 chance)
-      if (Math.random() > 0.9) {
-        throw new Error("Connection timed out");
-      }
-
       const newEmails: Email[] = [];
       const now = new Date().toISOString();
 
+      // SIMULATION LOGIC for Demo Purposes
+      // In a real backend, this would be a server-side function connecting to IMAP
       if (account.email.toLowerCase() === 'admin@p3lending.space') {
-        // Fetch P3 emails that aren't already in the list
         P3_LENDING_EMAILS.forEach(p3 => {
-          const exists = state.emails.some(e => e.id === p3.id);
+          const exists = state.emails.some(e => e.subject === p3.subject); // Simple check
           if (!exists) {
             newEmails.push({ ...p3, accountId, date: now });
           }
         });
-        
-        // Generate a dynamic one if all constants are present
-        if (newEmails.length === 0 && Math.random() > 0.5) {
-           const id = `p3-dyn-${Date.now()}`;
-           newEmails.push({
-             id,
-             accountId,
-             from: 'notifications@p3lending.space',
-             subject: 'System Alert: Daily Summary Available',
-             content: 'Your daily lending summary is ready for review on the dashboard.',
-             date: now,
-             isRead: false,
-             isAnalyzed: false
-           });
-        }
       } else {
-        // Generic account simulation - occasionally find new mail
         if (Math.random() > 0.3) {
             const id = `gen-${Date.now()}`;
             newEmails.push({
@@ -343,7 +392,7 @@ export default function App() {
             accountId,
             from: `newsletter@${account.email.split('@')[1] || 'generic.com'}`,
             subject: 'Weekly Update',
-            content: 'Here is the latest news from your subscription. We have updated our terms of service...',
+            content: 'Here is the latest news from your subscription.',
             date: now,
             isRead: false,
             isAnalyzed: false
@@ -351,11 +400,30 @@ export default function App() {
         }
       }
 
-      setState(prev => ({
-        ...prev,
-        accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'connected', lastSync: now } : a),
-        emails: [...newEmails, ...prev.emails]
-      }));
+      // Save new emails to Supabase
+      if (supabase && newEmails.length > 0) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+           await supabase.from('emails').insert(newEmails.map(e => ({
+              user_id: user.id,
+              from_address: e.from,
+              subject: e.subject,
+              body_text: e.content,
+              received_at: e.date,
+              is_read: e.isRead
+           })));
+           
+           // Re-fetch to get IDs
+           fetchData(user.id);
+        }
+      } else {
+         // Local update only
+         setState(prev => ({
+           ...prev,
+           accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'connected', lastSync: now } : a),
+           emails: [...newEmails, ...prev.emails]
+         }));
+      }
 
     } catch (error) {
        setState(prev => ({
@@ -367,10 +435,8 @@ export default function App() {
 
   const handleConnectAccount = async () => {
     setAccountStatus('auth');
-    // Simulate network delay for authentication
     await new Promise(r => setTimeout(r, 2000));
     
-    // Create new account object
     const newAccount: EmailAccount = {
       id: `acc-${Date.now()}`,
       email: accountForm.email,
@@ -381,35 +447,11 @@ export default function App() {
       lastSync: new Date().toISOString()
     };
 
-    let newEmails = [...state.emails];
+    // Logic to insert into DB would go here
     
-    // Simulate Fetching Logic based on email address
-    if (accountForm.email.toLowerCase() === 'admin@p3lending.space') {
-       // Merge P3 Lending specific emails if not already present (deduplication by ID)
-       P3_LENDING_EMAILS.forEach(p3Email => {
-          if (!newEmails.find(e => e.id === p3Email.id)) {
-             newEmails.unshift({...p3Email, accountId: newAccount.id});
-          }
-       });
-    } else {
-       // Generic simulation for other accounts
-       const domain = accountForm.email.split('@')[1];
-       newEmails.unshift({
-          id: `e-${Date.now()}`,
-          accountId: newAccount.id,
-          from: `welcome@${domain}`,
-          subject: 'Welcome to your new inbox',
-          content: 'IMAP Connection established successfully. This is a test message confirming your configuration.',
-          date: new Date().toISOString(),
-          isRead: false,
-          isAnalyzed: false
-       });
-    }
-
     setState(prev => ({
       ...prev,
-      accounts: [...prev.accounts, newAccount],
-      emails: newEmails
+      accounts: [...prev.accounts, newAccount]
     }));
     
     setAccountStatus('success');
@@ -424,7 +466,6 @@ export default function App() {
     setState(prev => ({
       ...prev,
       accounts: prev.accounts.filter(a => a.id !== id),
-      // Optionally remove emails associated with this account
       emails: prev.emails.filter(e => e.accountId !== id)
     }));
   };
@@ -475,13 +516,38 @@ export default function App() {
   const [automationForm, setAutomationForm] = useState({ name: '', condition: '', action: '' });
   const [composeForm, setComposeForm] = useState({ to: '', subject: '', content: '' });
 
-  if (!isAuthenticated) {
+  const handleLogin = () => {
+    // Handled by supabase auth state change listener
+  };
+
+  const handleLogout = async () => {
+    if (supabase) await supabase.auth.signOut();
+    setIsAuthenticated(false);
+  };
+
+  if (!isAuthenticated && !showSupabaseConfigModal) {
     return <Landing onLogin={handleLogin} />;
   }
 
   return (
     <div className={`flex h-screen overflow-hidden transition-all duration-500 ${isDarkMode ? 'bg-[#020617] text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
       
+      {/* Supabase Config Modal */}
+      <Modal isOpen={showSupabaseConfigModal} onClose={() => {}} title="Database Configuration" isDarkMode={isDarkMode} subtitle="Connect your Supabase Project">
+        <div className="space-y-6">
+           <p className="text-sm opacity-70">To activate NexusMail AI, enter your Supabase Project credentials. These are saved locally.</p>
+           <div>
+             <label className="text-[10px] font-black uppercase opacity-60 mb-2 block">Project URL</label>
+             <input type="text" placeholder="https://xyz.supabase.co" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={sbConfig.url} onChange={e => setSbConfig({...sbConfig, url: e.target.value})} />
+           </div>
+           <div>
+             <label className="text-[10px] font-black uppercase opacity-60 mb-2 block">Anon Public Key</label>
+             <input type="password" placeholder="eyJh..." className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={sbConfig.key} onChange={e => setSbConfig({...sbConfig, key: e.target.value})} />
+           </div>
+           <button onClick={handleSaveSupabaseConfig} className="w-full py-4 bg-emerald-500 text-white rounded-xl font-black uppercase tracking-widest mt-4">Connect Database</button>
+        </div>
+      </Modal>
+
       {/* Dynamic Modals */}
       <Modal isOpen={showAccountModal} onClose={() => setShowAccountModal(false)} title="Add Email Node" isDarkMode={isDarkMode}>
         {accountStatus === 'idle' && (
@@ -632,14 +698,18 @@ export default function App() {
           {state.activeView === 'inbox' && (
             <div className="flex h-full">
               <div className={`${inboxViewMode === 'detail' ? 'hidden md:flex' : 'flex'} w-full md:w-[460px] border-r flex flex-col overflow-y-auto ${isDarkMode ? 'bg-[#0f172a] border-slate-800' : 'bg-white'}`}>
-                {state.emails.map(email => (
-                  <div key={email.id} onClick={() => selectEmail(email.id)} className={`p-8 border-b cursor-pointer relative ${state.selectedEmailId === email.id ? 'bg-sky-500/5 border-l-4 border-l-sky-500' : 'hover:bg-slate-800/20'}`}>
-                    {!email.isRead && <div className="absolute top-9 right-8 w-3 h-3 bg-sky-500 rounded-full shadow-lg"></div>}
-                    <h4 className="text-base font-black truncate">{email.subject}</h4>
-                    <p className="text-xs opacity-60 line-clamp-2">{email.content}</p>
-                    <button onClick={(e) => { e.stopPropagation(); removeEmail(email.id); }} className="absolute bottom-4 right-4 text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100"><Icons.Settings className="w-4 h-4" /></button>
-                  </div>
-                ))}
+                {state.emails.length === 0 ? (
+                  <div className="p-8 text-center opacity-40 mt-10">No signals detected.</div>
+                ) : (
+                  state.emails.map(email => (
+                    <div key={email.id} onClick={() => selectEmail(email.id)} className={`p-8 border-b cursor-pointer relative ${state.selectedEmailId === email.id ? 'bg-sky-500/5 border-l-4 border-l-sky-500' : 'hover:bg-slate-800/20'}`}>
+                      {!email.isRead && <div className="absolute top-9 right-8 w-3 h-3 bg-sky-500 rounded-full shadow-lg"></div>}
+                      <h4 className="text-base font-black truncate">{email.subject}</h4>
+                      <p className="text-xs opacity-60 line-clamp-2">{email.content}</p>
+                      <button onClick={(e) => { e.stopPropagation(); removeEmail(email.id); }} className="absolute bottom-4 right-4 text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100"><Icons.Settings className="w-4 h-4" /></button>
+                    </div>
+                  ))
+                )}
               </div>
               <div className="flex-1 overflow-y-auto p-10 md:p-20">
                 {selectedEmail ? (
