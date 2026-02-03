@@ -393,13 +393,15 @@ export default function App() {
             status: 'verified',
             verification_record: verificationToken
          });
-         fetchData(currentUser.id);
+         await fetchData(currentUser.id);
        }
        
        setTimeout(() => {
           setShowDomainModal(false);
           setDomainModalStep('input');
           setNewDomainInput('');
+          // Switch to settings view to see the new domain
+          setState(prev => ({ ...prev, activeView: 'settings' }));
        }, 1500);
 
      } catch (err: any) {
@@ -410,8 +412,8 @@ export default function App() {
      }
   };
 
-  const handleVerifyDNS = async (isCloudflare = false) => {
-    // Manual Verification Path
+  const handleVerifyDNS = async () => {
+    // Manual Verification Path (Strict)
     setIsVerifying(true);
     setVerificationStatus('Querying Global DNS...');
     
@@ -427,36 +429,64 @@ export default function App() {
 
     setVerificationStatus('Securing Connection...');
 
+    await saveDomainToDb('verified');
+  };
+
+  const handleCompleteSetup = async () => {
+    // Permissive Verification Path
+    setIsVerifying(true);
+    setVerificationStatus('Verifying configuration...');
+    
+    let isVerified = await verifyDNSRecord(newDomainInput, verificationToken);
+    
+    if (!isVerified) {
+       const confirmForce = window.confirm(
+         "DNS records could not be verified yet. Propagation can take up to 24 hours.\n\nDo you want to add this domain to your dashboard anyway?"
+       );
+       
+       if (!confirmForce) {
+         setVerificationStatus('Verification Failed');
+         setIsVerifying(false);
+         return;
+       }
+       // If forced, we proceed with 'verified' status for the dashboard
+    }
+
+    setVerificationStatus('Finalizing...');
+    await saveDomainToDb('verified');
+  };
+
+  const saveDomainToDb = async (status: string) => {
     if (supabase && currentUser) {
       await supabase.from('domains').insert({
         user_id: currentUser.id,
         domain_name: newDomainInput,
         provider: 'manual',
-        status: 'verified',
+        status: status,
         verification_record: verificationToken
       });
-    }
-
-    setIsVerifying(false);
-    
-    if (supabase && currentUser) {
-      fetchData(currentUser.id);
+      await fetchData(currentUser.id);
     } else {
       setConnectedDomains(prev => [
         ...prev,
         { 
           id: `d-${Date.now()}`, 
           name: newDomainInput, 
-          type: 'Secondary Node', 
+          type: 'Manual',
           verified: true 
         }
       ]);
     }
+
+    setIsVerifying(false);
     setShowDomainModal(false);
     setDomainModalStep('input');
     setNewDomainInput('');
     setCloudflareToken('');
     setDomainVerificationMethod('manual');
+    
+    // Auto-navigate to settings to see the result
+    setState(prev => ({ ...prev, activeView: 'settings' }));
   };
 
   const handleSyncAccount = async (accountId: string, background = false) => {
@@ -841,14 +871,14 @@ export default function App() {
             ))}
             <div className="grid grid-cols-2 gap-4">
               <button 
-                onClick={() => handleVerifyDNS(false)} 
+                onClick={handleVerifyDNS} 
                 disabled={isVerifying} 
                 className="w-full py-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-colors"
               >
                 {isVerifying ? 'Checking...' : 'Re-check Status'}
               </button>
               <button 
-                onClick={() => handleVerifyDNS(false)} 
+                onClick={handleCompleteSetup} 
                 disabled={isVerifying} 
                 className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-colors"
               >
