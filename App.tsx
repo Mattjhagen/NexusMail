@@ -20,6 +20,7 @@ import {
   Icons 
 } from './constants';
 import { analyzeEmail, getDNSInstructions, draftReply, DNSInstruction } from './services/gemini';
+import Landing from './Landing';
 
 // Branded Logo Component
 export const NexusLogoSVG = ({ className = "" }: { className?: string }) => (
@@ -127,6 +128,7 @@ const Modal = ({ isOpen, onClose, title, subtitle, children, isDarkMode }: { isO
 };
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem('nexus_auth') === 'true');
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [inboxViewMode, setInboxViewMode] = useState<'list' | 'detail'>('list');
@@ -140,7 +142,10 @@ export default function App() {
   const [showComposeModal, setShowComposeModal] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
 
+  // Domain Modal
   const [domainModalStep, setDomainModalStep] = useState<'input' | 'scanning' | 'instructions'>('input');
+  const [domainVerificationMethod, setDomainVerificationMethod] = useState<'manual' | 'cloudflare'>('manual');
+  const [cloudflareToken, setCloudflareToken] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   const [newDomainInput, setNewDomainInput] = useState('');
   const [dnsInstructions, setDnsInstructions] = useState<DNSInstruction[]>([]);
@@ -181,6 +186,16 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('nexus_domains', JSON.stringify(connectedDomains));
   }, [connectedDomains]);
+
+  const handleLogin = () => {
+    localStorage.setItem('nexus_auth', 'true');
+    setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('nexus_auth');
+    setIsAuthenticated(false);
+  };
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
 
@@ -235,6 +250,16 @@ export default function App() {
   const handleConnectDomain = async () => {
     if (!newDomainInput.includes('.')) return;
     setDomainModalStep('scanning');
+    
+    // If Cloudflare selected, skip standard instructions and simulate API sync
+    if (domainVerificationMethod === 'cloudflare') {
+      setTimeout(() => {
+         // Mock Cloudflare verification success
+         handleVerifyDNS(true);
+      }, 3000);
+      return;
+    }
+
     try {
       const instructions = await getDNSInstructions(newDomainInput);
       setDnsInstructions(instructions);
@@ -244,17 +269,24 @@ export default function App() {
     }
   };
 
-  const handleVerifyDNS = async () => {
+  const handleVerifyDNS = async (isCloudflare = false) => {
     setIsVerifying(true);
     await new Promise(r => setTimeout(r, 2000));
     setIsVerifying(false);
     setConnectedDomains(prev => [
       ...prev,
-      { id: `d-${Date.now()}`, name: newDomainInput, type: 'Secondary Node', verified: true }
+      { 
+        id: `d-${Date.now()}`, 
+        name: newDomainInput, 
+        type: isCloudflare ? 'Cloudflare Sync' : 'Secondary Node', 
+        verified: true 
+      }
     ]);
     setShowDomainModal(false);
     setDomainModalStep('input');
     setNewDomainInput('');
+    setCloudflareToken('');
+    setDomainVerificationMethod('manual');
   };
 
   const handleSyncAccount = async (accountId: string) => {
@@ -443,6 +475,10 @@ export default function App() {
   const [automationForm, setAutomationForm] = useState({ name: '', condition: '', action: '' });
   const [composeForm, setComposeForm] = useState({ to: '', subject: '', content: '' });
 
+  if (!isAuthenticated) {
+    return <Landing onLogin={handleLogin} />;
+  }
+
   return (
     <div className={`flex h-screen overflow-hidden transition-all duration-500 ${isDarkMode ? 'bg-[#020617] text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
       
@@ -505,12 +541,32 @@ export default function App() {
 
       <Modal isOpen={showDomainModal} onClose={() => setShowDomainModal(false)} title="Domain Integration" isDarkMode={isDarkMode}>
         {domainModalStep === 'input' && (
-          <div className="space-y-8">
+          <div className="space-y-6">
+             {/* Verification Method Toggle */}
+             <div className="flex p-1 bg-slate-900/50 rounded-xl border border-slate-800">
+                <button onClick={() => setDomainVerificationMethod('manual')} className={`flex-1 py-2 text-xs font-bold uppercase rounded-lg transition-all ${domainVerificationMethod === 'manual' ? 'bg-sky-500 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}>Manual DNS</button>
+                <button onClick={() => setDomainVerificationMethod('cloudflare')} className={`flex-1 py-2 text-xs font-bold uppercase rounded-lg transition-all ${domainVerificationMethod === 'cloudflare' ? 'bg-[#F38020] text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}>Cloudflare Sync</button>
+             </div>
+
             <input type="text" placeholder="your-company.com" value={newDomainInput} onChange={(e) => setNewDomainInput(e.target.value)} className={`w-full px-5 py-4 rounded-2xl border text-lg font-bold ${isDarkMode ? 'bg-slate-900 border-slate-700' : ''}`} />
-            <button onClick={handleConnectDomain} className="w-full bg-gradient-to-r from-sky-500 to-indigo-600 text-white py-5 rounded-2xl font-black uppercase tracking-widest">Synchronize Node</button>
+            
+            {domainVerificationMethod === 'cloudflare' && (
+               <input type="password" placeholder="Cloudflare API Token" value={cloudflareToken} onChange={(e) => setCloudflareToken(e.target.value)} className={`w-full px-5 py-4 rounded-2xl border text-lg font-bold ${isDarkMode ? 'bg-slate-900 border-slate-700' : ''}`} />
+            )}
+
+            <button onClick={handleConnectDomain} className={`w-full text-white py-5 rounded-2xl font-black uppercase tracking-widest ${domainVerificationMethod === 'cloudflare' ? 'bg-[#F38020]' : 'bg-gradient-to-r from-sky-500 to-indigo-600'}`}>
+               {domainVerificationMethod === 'cloudflare' ? 'Auto-Sync DNS' : 'Synchronize Node'}
+            </button>
           </div>
         )}
-        {domainModalStep === 'scanning' && <div className="py-16 text-center font-black animate-pulse text-sky-400">Mapping DNS Logic...</div>}
+        {domainModalStep === 'scanning' && (
+           <div className="py-16 text-center space-y-4">
+              <div className={`w-12 h-12 rounded-full border-4 border-t-transparent animate-spin mx-auto ${domainVerificationMethod === 'cloudflare' ? 'border-[#F38020]' : 'border-sky-500'}`}></div>
+              <p className="font-black animate-pulse text-sky-400">
+                 {domainVerificationMethod === 'cloudflare' ? 'Authenticating with Cloudflare...' : 'Mapping DNS Logic...'}
+              </p>
+           </div>
+        )}
         {domainModalStep === 'instructions' && (
           <div className="space-y-6">
             {dnsInstructions.map((dns, idx) => (
@@ -520,7 +576,7 @@ export default function App() {
                 <div className="text-[10px] font-mono opacity-60 truncate">VALUE: {dns.content}</div>
               </div>
             ))}
-            <button onClick={handleVerifyDNS} disabled={isVerifying} className="w-full py-4 bg-emerald-600 text-white rounded-xl font-black">{isVerifying ? 'Verifying...' : 'Verify Logic'}</button>
+            <button onClick={() => handleVerifyDNS(false)} disabled={isVerifying} className="w-full py-4 bg-emerald-600 text-white rounded-xl font-black">{isVerifying ? 'Verifying...' : 'Verify Logic'}</button>
           </div>
         )}
       </Modal>
@@ -554,6 +610,12 @@ export default function App() {
               <item.icon className="w-6 h-6" />{item.label}{item.id === 'inbox' && unreadCount > 0 && <span className="ml-auto px-2 py-1 bg-fuchsia-500/20 text-fuchsia-400 rounded-full text-[10px]">{unreadCount}</span>}
             </button>
           ))}
+        </div>
+        <div className="p-5 border-t border-slate-800">
+           <button onClick={handleLogout} className="w-full flex items-center justify-center gap-3 py-4 text-xs font-bold uppercase text-slate-500 hover:text-white transition-colors">
+             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+             Terminate Session
+           </button>
         </div>
       </nav>
 
