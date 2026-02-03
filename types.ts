@@ -2,8 +2,19 @@
 export type Priority = 'low' | 'medium' | 'high' | 'urgent';
 export type TicketStatus = 'open' | 'in-progress' | 'resolved' | 'closed';
 
+export interface EmailAccount {
+  id: string;
+  email: string;
+  host: string;
+  port: number;
+  type: 'imap' | 'pop3';
+  lastSync: string;
+  status: 'connected' | 'error' | 'syncing';
+}
+
 export interface Email {
   id: string;
+  accountId?: string; // Link email to specific account
   from: string;
   subject: string;
   content: string;
@@ -51,6 +62,7 @@ export interface AutomationRule {
 
 export interface AppState {
   activeView: 'inbox' | 'tickets' | 'tasks' | 'automations' | 'settings';
+  accounts: EmailAccount[];
   emails: Email[];
   tickets: Ticket[];
   tasks: Task[];

@@ -8,13 +8,15 @@ import {
   AutomationRule, 
   Priority, 
   TicketStatus,
-  AIInsight
+  AIInsight,
+  EmailAccount
 } from './types';
 import { 
   INITIAL_EMAILS, 
   INITIAL_TICKETS, 
   INITIAL_TASKS, 
   INITIAL_AUTOMATIONS, 
+  P3_LENDING_EMAILS,
   Icons 
 } from './constants';
 import { analyzeEmail, getDNSInstructions, draftReply, DNSInstruction } from './services/gemini';
@@ -136,6 +138,7 @@ export default function App() {
   const [showAutomationModal, setShowAutomationModal] = useState(false);
   const [showDraftModal, setShowDraftModal] = useState(false);
   const [showComposeModal, setShowComposeModal] = useState(false);
+  const [showAccountModal, setShowAccountModal] = useState(false);
 
   const [domainModalStep, setDomainModalStep] = useState<'input' | 'scanning' | 'instructions'>('input');
   const [isVerifying, setIsVerifying] = useState(false);
@@ -150,6 +153,7 @@ export default function App() {
     const saved = localStorage.getItem('nexus_state');
     const defaultState = {
       activeView: 'inbox',
+      accounts: [],
       emails: INITIAL_EMAILS,
       tickets: INITIAL_TICKETS,
       tasks: INITIAL_TASKS,
@@ -163,12 +167,16 @@ export default function App() {
   const [draftContent, setDraftContent] = useState('');
   const [isDrafting, setIsDrafting] = useState(false);
 
+  // Account Form
+  const [accountForm, setAccountForm] = useState({ email: '', password: '', host: '', port: 993 });
+  const [accountStatus, setAccountStatus] = useState<'idle' | 'auth' | 'success'>('idle');
+
   // Persistence
   useEffect(() => {
     localStorage.setItem('nexus_state', JSON.stringify({
-      emails: state.emails, tickets: state.tickets, tasks: state.tasks, automations: state.automations
+      accounts: state.accounts, emails: state.emails, tickets: state.tickets, tasks: state.tasks, automations: state.automations
     }));
-  }, [state.emails, state.tickets, state.tasks, state.automations]);
+  }, [state.accounts, state.emails, state.tickets, state.tasks, state.automations]);
 
   useEffect(() => {
     localStorage.setItem('nexus_domains', JSON.stringify(connectedDomains));
@@ -249,6 +257,70 @@ export default function App() {
     setNewDomainInput('');
   };
 
+  const handleConnectAccount = async () => {
+    setAccountStatus('auth');
+    // Simulate network delay for authentication
+    await new Promise(r => setTimeout(r, 2000));
+    
+    // Create new account object
+    const newAccount: EmailAccount = {
+      id: `acc-${Date.now()}`,
+      email: accountForm.email,
+      host: accountForm.host || `imap.${accountForm.email.split('@')[1]}`,
+      port: accountForm.port,
+      type: 'imap',
+      status: 'connected',
+      lastSync: new Date().toISOString()
+    };
+
+    let newEmails = [...state.emails];
+    
+    // Simulate Fetching Logic based on email address
+    if (accountForm.email.toLowerCase() === 'admin@p3lending.space') {
+       // Merge P3 Lending specific emails if not already present (deduplication by ID)
+       P3_LENDING_EMAILS.forEach(p3Email => {
+          if (!newEmails.find(e => e.id === p3Email.id)) {
+             newEmails.unshift({...p3Email, accountId: newAccount.id});
+          }
+       });
+    } else {
+       // Generic simulation for other accounts
+       const domain = accountForm.email.split('@')[1];
+       newEmails.unshift({
+          id: `e-${Date.now()}`,
+          accountId: newAccount.id,
+          from: `welcome@${domain}`,
+          subject: 'Welcome to your new inbox',
+          content: 'IMAP Connection established successfully. This is a test message confirming your configuration.',
+          date: new Date().toISOString(),
+          isRead: false,
+          isAnalyzed: false
+       });
+    }
+
+    setState(prev => ({
+      ...prev,
+      accounts: [...prev.accounts, newAccount],
+      emails: newEmails
+    }));
+    
+    setAccountStatus('success');
+    setTimeout(() => {
+      setShowAccountModal(false);
+      setAccountStatus('idle');
+      setAccountForm({ email: '', password: '', host: '', port: 993 });
+    }, 1000);
+  };
+
+  const removeAccount = (id: string) => {
+    setState(prev => ({
+      ...prev,
+      accounts: prev.accounts.filter(a => a.id !== id),
+      // Optionally remove emails associated with this account
+      emails: prev.emails.filter(e => e.accountId !== id)
+    }));
+  };
+
   const removeDomain = (id: string) => setConnectedDomains(prev => prev.filter(d => d.id !== id));
   const removeEmail = (id: string) => setState(p => ({ ...p, emails: p.emails.filter(e => e.id !== id), selectedEmailId: p.selectedEmailId === id ? null : p.selectedEmailId }));
   const removeTicket = (id: string) => setState(p => ({ ...p, tickets: p.tickets.filter(t => t.id !== id) }));
@@ -299,6 +371,44 @@ export default function App() {
     <div className={`flex h-screen overflow-hidden transition-all duration-500 ${isDarkMode ? 'bg-[#020617] text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
       
       {/* Dynamic Modals */}
+      <Modal isOpen={showAccountModal} onClose={() => setShowAccountModal(false)} title="Add Email Node" isDarkMode={isDarkMode}>
+        {accountStatus === 'idle' && (
+          <div className="space-y-4">
+             <div>
+               <label className="text-[10px] font-black uppercase opacity-60 mb-2 block">Email Address</label>
+               <input type="email" placeholder="admin@company.com" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={accountForm.email} onChange={e => setAccountForm({...accountForm, email: e.target.value})} />
+             </div>
+             <div>
+               <label className="text-[10px] font-black uppercase opacity-60 mb-2 block">App Password / Key</label>
+               <input type="password" placeholder="••••••••••••" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={accountForm.password} onChange={e => setAccountForm({...accountForm, password: e.target.value})} />
+             </div>
+             <div className="grid grid-cols-3 gap-4">
+                <div className="col-span-2">
+                   <label className="text-[10px] font-black uppercase opacity-60 mb-2 block">IMAP Host</label>
+                   <input type="text" placeholder={accountForm.email ? `imap.${accountForm.email.split('@')[1]}` : 'imap.server.com'} className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={accountForm.host} onChange={e => setAccountForm({...accountForm, host: e.target.value})} />
+                </div>
+                <div>
+                   <label className="text-[10px] font-black uppercase opacity-60 mb-2 block">Port</label>
+                   <input type="number" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={accountForm.port} onChange={e => setAccountForm({...accountForm, port: parseInt(e.target.value)})} />
+                </div>
+             </div>
+             <button onClick={handleConnectAccount} className="w-full py-4 bg-sky-500 text-white rounded-xl font-black uppercase tracking-widest mt-4">Connect Account</button>
+          </div>
+        )}
+        {accountStatus === 'auth' && (
+           <div className="py-10 text-center space-y-4">
+              <div className="w-16 h-16 border-4 border-sky-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+              <p className="font-black animate-pulse text-sky-400">Authenticating with Server...</p>
+           </div>
+        )}
+        {accountStatus === 'success' && (
+           <div className="py-10 text-center space-y-4 text-emerald-500">
+              <Icons.Zap className="w-16 h-16 mx-auto" />
+              <p className="font-black text-xl">Account Connected Successfully</p>
+           </div>
+        )}
+      </Modal>
+
       <Modal isOpen={showDraftModal} onClose={() => setShowDraftModal(false)} title="Neural Draft" isDarkMode={isDarkMode}>
         {isDrafting ? <div className="p-10 text-center font-black animate-pulse text-sky-400">Synthesizing Reply...</div> : (
           <div className="space-y-6">
@@ -372,7 +482,7 @@ export default function App() {
       </nav>
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        <header className="h-24 border-b flex items-center justify-between px-10 transition-all ${isDarkMode ? 'bg-[#020617]/90 backdrop-blur-xl border-slate-800' : 'bg-white'}">
+        <header className={`h-24 border-b flex items-center justify-between px-10 transition-all ${isDarkMode ? 'bg-[#020617]/90 backdrop-blur-xl border-slate-800' : 'bg-white'}`}>
           <h2 className="text-2xl font-black uppercase tracking-tighter">{state.activeView} Matrix</h2>
           <div className="flex items-center gap-4">
             <button onClick={() => setShowComposeModal(true)} className="p-3 bg-sky-500 text-white rounded-xl shadow-lg"><Icons.Sparkles className="w-5 h-5" /></button>
@@ -442,6 +552,24 @@ export default function App() {
           {state.activeView === 'settings' && (
             <div className="p-10 md:p-20 overflow-y-auto h-full">
               <div className="max-w-3xl mx-auto space-y-12">
+                <section>
+                   <h3 className="text-2xl font-black uppercase mb-8">Connected Accounts</h3>
+                   <div className="space-y-4">
+                     {state.accounts.map(acc => (
+                        <div key={acc.id} className="p-6 rounded-2xl border border-slate-800 bg-slate-900/40 flex justify-between items-center group">
+                           <div className="flex items-center gap-4">
+                              <div className="p-3 bg-sky-500/10 rounded-xl text-sky-500"><Icons.Server className="w-6 h-6" /></div>
+                              <div>
+                                 <p className="font-black text-lg">{acc.email}</p>
+                                 <p className="text-[10px] uppercase opacity-40">IMAP Connected • Last Sync: {new Date(acc.lastSync).toLocaleTimeString()}</p>
+                              </div>
+                           </div>
+                           <button onClick={() => removeAccount(acc.id)} className="text-rose-500 opacity-0 group-hover:opacity-100 transition-all text-xs font-black uppercase">Disconnect</button>
+                        </div>
+                     ))}
+                     <button onClick={() => setShowAccountModal(true)} className="w-full p-8 border-2 border-dashed border-slate-800 rounded-[2rem] opacity-40 hover:opacity-100 font-black uppercase text-xs hover:border-sky-500 hover:bg-sky-500/5 transition-all">Connect New Email Account</button>
+                   </div>
+                </section>
                 <section><h3 className="text-2xl font-black uppercase mb-8">Node Connections</h3><div className="space-y-4">{connectedDomains.map(d => <div key={d.id} className="p-6 rounded-2xl border border-slate-800 bg-slate-900/40 flex justify-between items-center"><div><p className="font-black text-lg">{d.name}</p><p className="text-[10px] uppercase opacity-40">{d.type}</p></div><button onClick={() => removeDomain(d.id)} className="text-rose-500">Delete</button></div>)}<button onClick={() => { setDomainModalStep('input'); setShowDomainModal(true); }} className="w-full p-8 border-2 border-dashed border-slate-800 rounded-[2rem] opacity-40 hover:opacity-100 font-black uppercase text-xs">Sync New Node</button></div></section>
                 <section><h3 className="text-2xl font-black uppercase mb-8">System Protocols</h3><div className="p-8 border border-slate-800 rounded-[2rem] bg-slate-900/20 flex justify-between items-center"><div><p className="font-black text-lg">Neural Auto-Index</p><p className="text-xs opacity-50">Auto-summarize incoming transmissions.</p></div><ToggleSwitch checked={true} onChange={() => {}} darkMode={isDarkMode} /></div></section>
                 <div className="pt-20 border-t border-slate-800 opacity-40 text-[10px] font-black uppercase flex justify-between"><span>NexusMail v2.6.0 Enterprise</span><span>© 2024 Global Nexus Systems</span></div>

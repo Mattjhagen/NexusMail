@@ -31,6 +31,36 @@ export const INITIAL_EMAILS = [
   }
 ];
 
+export const P3_LENDING_EMAILS = [
+  {
+    id: 'p3-1',
+    from: 'underwriting@p3lending.space',
+    subject: 'Loan Application #LN-8892 Review Complete',
+    content: "The underwriting team has reviewed the application for Smith Construction LLC. We need the following documents to proceed to final approval: 1. Updated P&L Statement for Q3 2024. 2. Proof of Insurance for the new equipment. Please upload these to the portal by EOD.",
+    date: new Date().toISOString(),
+    isRead: false,
+    isAnalyzed: false
+  },
+  {
+    id: 'p3-2',
+    from: 'newapps@broker-network.com',
+    subject: 'New Lead: $2.5M Commercial Refinance',
+    content: "Client Name: Green Valley Estates. Property Type: Multi-Family. Requested Amount: $2,500,000. LTV: 65%. Credit Score: 780. Please assign a loan officer to reach out within 24 hours.",
+    date: new Date(Date.now() - 3600000).toISOString(),
+    isRead: false,
+    isAnalyzed: false
+  },
+  {
+    id: 'p3-3',
+    from: 'compliance@p3lending.space',
+    subject: 'Action Required: Rate Sheet Update Q4',
+    content: "Team, the Federal Reserve's recent announcement has impacted our base rates. The new rate sheet (v4.2) is attached and effective immediately. Ensure all new quotes reflect the +25bps adjustment.",
+    date: new Date(Date.now() - 7200000).toISOString(),
+    isRead: true,
+    isAnalyzed: false
+  }
+];
+
 export const INITIAL_TICKETS = [
   {
     id: 't1',
@@ -105,6 +135,11 @@ export const Icons = {
   Moon: (props: any) => (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
+    </svg>
+  ),
+  Server: (props: any) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 0 1-3-3m3 3a3 3 0 0 0-3 3m16.5-6a3 3 0 0 0-3-3m0 0a3 3 0 0 0-3 3m3 3h3m-3 3a3 3 0 0 1-3 3m0 0a3 3 0 0 1-3-3m3 3v-5.25m0-5.25V3.75m0 0a3 3 0 0 1 3 3m-3-3a3 3 0 0 0-3 3" />
     </svg>
   )
 };
