@@ -29,6 +29,7 @@ create table if not exists public.email_accounts (
   id uuid default gen_random_uuid() primary key,
   user_id uuid references public.profiles(id) not null,
   email_address text not null,
+  auth_token text, -- Stores the app password/token
   host text not null,
   port int not null,
   protocol text check (protocol in ('imap', 'pop3')) default 'imap',
@@ -132,3 +133,11 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
+
+-- MIGRATION SAFEGUARD: Add columns if they don't exist (for existing deployments)
+do $$
+begin
+  if not exists (select 1 from information_schema.columns where table_name='email_accounts' and column_name='auth_token') then
+    alter table public.email_accounts add column auth_token text;
+  end if;
+end $$;

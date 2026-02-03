@@ -1,0 +1,8 @@
+
+{
+  "imports": {
+    "nodemailer": "npm:nodemailer@6.9.7",
+    "imap-simple": "npm:imap-simple@5.1.0",
+    "mailparser": "npm:mailparser@3.6.5"
+  }
+}

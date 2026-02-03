@@ -139,6 +139,7 @@ export default function App() {
   const [showDraftModal, setShowDraftModal] = useState(false);
   const [showComposeModal, setShowComposeModal] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   
   // Config Forms
   const [sbConfig, setSbConfig] = useState({ url: '', key: '' });
@@ -428,74 +429,31 @@ export default function App() {
       }));
     }
 
+    if (!supabase) return;
+
     try {
-      const account = state.accounts.find(a => a.id === accountId);
-      if (!account) throw new Error("Account not found");
+      // 1. Invoke Edge Function to perform actual IMAP sync
+      const { data, error } = await supabase.functions.invoke('email-handler', {
+        body: { action: 'sync', accountId }
+      });
 
-      await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
-
-      const newEmails: Email[] = [];
-      const now = new Date().toISOString();
-
-      // SIMULATION LOGIC for Demo Purposes
-      if (account.email.toLowerCase() === 'admin@p3lending.space') {
-        P3_LENDING_EMAILS.forEach(p3 => {
-          const exists = state.emails.some(e => e.subject === p3.subject);
-          if (!exists) {
-            newEmails.push({ ...p3, accountId, date: now });
-          }
-        });
-      } else {
-        if (Math.random() > 0.3) {
-            const id = `gen-${Date.now()}`;
-            newEmails.push({
-              id,
-              accountId,
-              from: `newsletter@${account.email.split('@')[1] || 'generic.com'}`,
-              subject: 'Weekly Update',
-              content: 'Here is the latest news from your subscription.',
-              date: now,
-              isRead: false,
-              isAnalyzed: false
-            });
-        }
-      }
+      if (error) throw error;
+      
+      const newEmailCount = data?.count || 0;
 
       // Notify User
-      if (newEmails.length > 0 && Notification.permission === 'granted') {
+      if (newEmailCount > 0 && Notification.permission === 'granted') {
          new Notification('New Signal Detected', {
-            body: `Received ${newEmails.length} new transmission(s) from ${account.email}.`,
+            body: `Received ${newEmailCount} new transmission(s).`,
             icon: '/vite.svg'
          });
       }
 
-      if (supabase && currentUser && newEmails.length > 0) {
-           await supabase.from('emails').insert(newEmails.map(e => ({
-              user_id: currentUser.id,
-              account_id: accountId,
-              from_address: e.from,
-              subject: e.subject,
-              body_text: e.content,
-              received_at: e.date,
-              is_read: e.isRead
-           })));
-           
-           // Update account last_sync
-           await supabase.from('email_accounts').update({ 
-             last_sync_at: now,
-             status: 'connected'
-           }).eq('id', accountId);
-
-           fetchData(currentUser.id);
-      } else {
-         setState(prev => ({
-           ...prev,
-           accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'connected', lastSync: now } : a),
-           emails: [...newEmails, ...prev.emails]
-         }));
-      }
+      // 2. Fetch updated data from DB
+      await fetchData(currentUser.id);
 
     } catch (error) {
+       console.error("Sync failed:", error);
        setState(prev => ({
         ...prev,
         accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'error' } : a)
@@ -505,41 +463,71 @@ export default function App() {
 
   const handleConnectAccount = async () => {
     setAccountStatus('auth');
-    await new Promise(r => setTimeout(r, 2000));
+    if (!supabase || !currentUser) return;
     
-    if (supabase && currentUser) {
+    // In a real production app, we should verify creds via backend first
+    // For now, we save and try to sync
+    
+    try {
       await supabase.from('email_accounts').insert({
         user_id: currentUser.id,
         email_address: accountForm.email,
+        auth_token: accountForm.password, // Storing encrypted in real world, raw here for demo
         host: accountForm.host || `imap.${accountForm.email.split('@')[1]}`,
         port: accountForm.port,
         protocol: 'imap',
         status: 'connected',
         last_sync_at: new Date().toISOString()
       });
-      fetchData(currentUser.id);
-    } else {
-      const newAccount: EmailAccount = {
-        id: `acc-${Date.now()}`,
-        email: accountForm.email,
-        host: accountForm.host || `imap.${accountForm.email.split('@')[1]}`,
-        port: accountForm.port,
-        type: 'imap',
-        status: 'connected',
-        lastSync: new Date().toISOString()
-      };
-      setState(prev => ({
-        ...prev,
-        accounts: [...prev.accounts, newAccount]
-      }));
-    }
-    
-    setAccountStatus('success');
-    setTimeout(() => {
-      setShowAccountModal(false);
+      await fetchData(currentUser.id);
+      
+      setAccountStatus('success');
+      setTimeout(() => {
+        setShowAccountModal(false);
+        setAccountStatus('idle');
+        setAccountForm({ email: '', password: '', host: '', port: 993 });
+      }, 1000);
+    } catch (err) {
       setAccountStatus('idle');
-      setAccountForm({ email: '', password: '', host: '', port: 993 });
-    }, 1000);
+      alert("Failed to connect account.");
+    }
+  };
+
+  const handleSendEmail = async () => {
+    if (!supabase || !currentUser) return;
+    if (state.accounts.length === 0) {
+      alert("Please connect an email account first.");
+      return;
+    }
+
+    setIsSending(true);
+    try {
+      // Use the first account to send
+      const accountId = state.accounts[0].id;
+      
+      const { error } = await supabase.functions.invoke('email-handler', {
+        body: { 
+          action: 'send', 
+          accountId,
+          to: composeForm.to,
+          subject: composeForm.subject,
+          content: composeForm.content
+        }
+      });
+
+      if (error) throw error;
+      
+      // Optimistic update
+      addEmail(composeForm.to, composeForm.subject, composeForm.content);
+      setShowComposeModal(false);
+      setComposeForm({ to: '', subject: '', content: '' });
+      
+    } catch (err) {
+      console.error(err);
+      alert("Failed to send transmission. Check backend logs.");
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const removeAccount = async (id: string) => {
@@ -650,7 +638,6 @@ export default function App() {
   const addEmail = (to: string, subject: string, content: string) => {
     const newEmail: Email = { id: `e-${Date.now()}`, from: to, subject, content, date: new Date().toISOString(), isRead: true, isAnalyzed: false };
     setState(p => ({ ...p, emails: [newEmail, ...p.emails] }));
-    // Note: Sent emails usually go to a different table or folder, omitted for this demo
   };
 
   const addAutomation = async (name: string, condition: string, action: string) => {
@@ -783,7 +770,9 @@ export default function App() {
           <input type="text" placeholder="Recipient" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={composeForm.to} onChange={e => setComposeForm({...composeForm, to: e.target.value})} />
           <input type="text" placeholder="Subject" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={composeForm.subject} onChange={e => setComposeForm({...composeForm, subject: e.target.value})} />
           <textarea placeholder="Message content..." rows={6} className={`w-full p-4 rounded-xl border font-medium ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={composeForm.content} onChange={e => setComposeForm({...composeForm, content: e.target.value})} />
-          <button className="w-full py-4 bg-indigo-500 text-white rounded-xl font-black uppercase tracking-widest" onClick={() => { addEmail(composeForm.to, composeForm.subject, composeForm.content); setShowComposeModal(false); }}>Send Transmission</button>
+          <button className="w-full py-4 bg-indigo-500 text-white rounded-xl font-black uppercase tracking-widest" disabled={isSending} onClick={handleSendEmail}>
+             {isSending ? 'Transmitting...' : 'Send Transmission'}
+          </button>
         </div>
       </Modal>
 
