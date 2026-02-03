@@ -257,6 +257,82 @@ export default function App() {
     setNewDomainInput('');
   };
 
+  const handleSyncAccount = async (accountId: string) => {
+    // Set status to syncing
+    setState(prev => ({
+      ...prev,
+      accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'syncing' } : a)
+    }));
+
+    try {
+      const account = state.accounts.find(a => a.id === accountId);
+      if (!account) throw new Error("Account not found");
+
+      // Simulate network delay
+      await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
+
+      // Simulate connection error randomly (e.g. 1 in 10 chance)
+      if (Math.random() > 0.9) {
+        throw new Error("Connection timed out");
+      }
+
+      const newEmails: Email[] = [];
+      const now = new Date().toISOString();
+
+      if (account.email.toLowerCase() === 'admin@p3lending.space') {
+        // Fetch P3 emails that aren't already in the list
+        P3_LENDING_EMAILS.forEach(p3 => {
+          const exists = state.emails.some(e => e.id === p3.id);
+          if (!exists) {
+            newEmails.push({ ...p3, accountId, date: now });
+          }
+        });
+        
+        // Generate a dynamic one if all constants are present
+        if (newEmails.length === 0 && Math.random() > 0.5) {
+           const id = `p3-dyn-${Date.now()}`;
+           newEmails.push({
+             id,
+             accountId,
+             from: 'notifications@p3lending.space',
+             subject: 'System Alert: Daily Summary Available',
+             content: 'Your daily lending summary is ready for review on the dashboard.',
+             date: now,
+             isRead: false,
+             isAnalyzed: false
+           });
+        }
+      } else {
+        // Generic account simulation - occasionally find new mail
+        if (Math.random() > 0.3) {
+            const id = `gen-${Date.now()}`;
+            newEmails.push({
+            id,
+            accountId,
+            from: `newsletter@${account.email.split('@')[1] || 'generic.com'}`,
+            subject: 'Weekly Update',
+            content: 'Here is the latest news from your subscription. We have updated our terms of service...',
+            date: now,
+            isRead: false,
+            isAnalyzed: false
+            });
+        }
+      }
+
+      setState(prev => ({
+        ...prev,
+        accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'connected', lastSync: now } : a),
+        emails: [...newEmails, ...prev.emails]
+      }));
+
+    } catch (error) {
+       setState(prev => ({
+        ...prev,
+        accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'error' } : a)
+      }));
+    }
+  };
+
   const handleConnectAccount = async () => {
     setAccountStatus('auth');
     // Simulate network delay for authentication
@@ -556,15 +632,29 @@ export default function App() {
                    <h3 className="text-2xl font-black uppercase mb-8">Connected Accounts</h3>
                    <div className="space-y-4">
                      {state.accounts.map(acc => (
-                        <div key={acc.id} className="p-6 rounded-2xl border border-slate-800 bg-slate-900/40 flex justify-between items-center group">
+                        <div key={acc.id} className={`p-6 rounded-2xl border transition-all flex justify-between items-center group ${acc.status === 'error' ? 'border-rose-500/50 bg-rose-500/10' : 'border-slate-800 bg-slate-900/40'}`}>
                            <div className="flex items-center gap-4">
-                              <div className="p-3 bg-sky-500/10 rounded-xl text-sky-500"><Icons.Server className="w-6 h-6" /></div>
+                              <div className={`p-3 rounded-xl transition-all ${acc.status === 'syncing' ? 'animate-spin text-sky-500 bg-sky-500/10' : (acc.status === 'error' ? 'text-rose-500 bg-rose-500/10' : 'text-emerald-500 bg-emerald-500/10')}`}>
+                                 {acc.status === 'syncing' ? <Icons.Refresh className="w-6 h-6" /> : <Icons.Server className="w-6 h-6" />}
+                              </div>
                               <div>
                                  <p className="font-black text-lg">{acc.email}</p>
-                                 <p className="text-[10px] uppercase opacity-40">IMAP Connected • Last Sync: {new Date(acc.lastSync).toLocaleTimeString()}</p>
+                                 <div className="flex items-center gap-2">
+                                   <p className="text-[10px] uppercase opacity-40">
+                                      {acc.status === 'syncing' ? 'Syncing...' : (acc.status === 'error' ? 'Connection Error' : 'IMAP Connected')}
+                                   </p>
+                                   {acc.status === 'connected' && <span className="text-[10px] opacity-30">• Last Sync: {new Date(acc.lastSync).toLocaleTimeString()}</span>}
+                                 </div>
                               </div>
                            </div>
-                           <button onClick={() => removeAccount(acc.id)} className="text-rose-500 opacity-0 group-hover:opacity-100 transition-all text-xs font-black uppercase">Disconnect</button>
+                           <div className="flex items-center gap-3">
+                             <button onClick={() => handleSyncAccount(acc.id)} className="p-2 text-sky-500 hover:bg-sky-500/10 rounded-lg transition-all" title="Sync Now">
+                                <Icons.Refresh className={`w-5 h-5 ${acc.status === 'syncing' ? 'animate-spin' : ''}`} />
+                             </button>
+                             <button onClick={() => removeAccount(acc.id)} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all" title="Disconnect">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                             </button>
+                           </div>
                         </div>
                      ))}
                      <button onClick={() => setShowAccountModal(true)} className="w-full p-8 border-2 border-dashed border-slate-800 rounded-[2rem] opacity-40 hover:opacity-100 font-black uppercase text-xs hover:border-sky-500 hover:bg-sky-500/5 transition-all">Connect New Email Account</button>
