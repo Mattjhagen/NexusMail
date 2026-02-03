@@ -74,12 +74,18 @@ export interface DNSInstruction {
   purpose: string;
 }
 
-export const getDNSInstructions = async (domain: string): Promise<DNSInstruction[]> => {
+// Updated to accept a specific verification token to enforce real checks
+export const getDNSInstructions = async (domain: string, verificationToken: string): Promise<DNSInstruction[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: `Generate the required DNS records for the domain "${domain}" to connect it to NexusMail AI services. Provide MX for mail delivery, TXT for SPF/DKIM security.`,
+    contents: `Generate the required DNS records for the domain "${domain}" to connect it to NexusMail AI services.
+    
+    CRITICAL REQUIREMENT:
+    You MUST include a TXT record with the EXACT content: "${verificationToken}" for domain ownership verification.
+    
+    Also include MX for mail delivery (mx.p3lending.space) and TXT for SPF (v=spf1 include:_spf.p3lending.space ~all).`,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -104,9 +110,28 @@ export const getDNSInstructions = async (domain: string): Promise<DNSInstruction
     return JSON.parse(jsonStr) as DNSInstruction[];
   } catch (err) {
     console.error("Failed to generate DNS instructions", err);
+    // Fallback if AI fails, ensuring the critical token is present
     return [
-      { type: 'MX', name: '@', content: 'mx1.nexusmail.ai', priority: 10, purpose: 'Primary mail routing' },
-      { type: 'TXT', name: '@', content: 'v=spf1 include:_spf.nexusmail.ai ~all', purpose: 'SPF Anti-spam protection' }
+      { type: 'TXT', name: '@', content: verificationToken, purpose: 'Domain Ownership Verification' },
+      { type: 'MX', name: '@', content: 'mx1.p3lending.space', priority: 10, purpose: 'Primary mail routing' },
+      { type: 'TXT', name: '@', content: 'v=spf1 include:_spf.p3lending.space ~all', purpose: 'SPF Anti-spam protection' }
     ];
+  }
+};
+
+// Real DNS Checker using Google Public DNS API
+export const verifyDNSRecord = async (domain: string, token: string): Promise<boolean> => {
+  try {
+    // Uses Google's DNS-over-HTTPS API to check TXT records
+    const response = await fetch(`https://dns.google/resolve?name=${domain}&type=TXT`);
+    const data = await response.json();
+    
+    if (!data.Answer) return false;
+    
+    // Check if any TXT record contains our token
+    return data.Answer.some((record: any) => record.data && record.data.includes(token));
+  } catch (error) {
+    console.error("DNS Verification Failed:", error);
+    return false;
   }
 };

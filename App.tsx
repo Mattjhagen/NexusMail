@@ -19,7 +19,7 @@ import {
   P3_LENDING_EMAILS,
   Icons 
 } from './constants';
-import { analyzeEmail, getDNSInstructions, draftReply, DNSInstruction } from './services/gemini';
+import { analyzeEmail, getDNSInstructions, draftReply, DNSInstruction, verifyDNSRecord } from './services/gemini';
 import Landing from './Landing';
 import { supabase, saveSupabaseConfig, getSupabaseConfig, clearSupabaseConfig } from './lib/supabase';
 
@@ -113,7 +113,9 @@ export default function App() {
   const [domainVerificationMethod, setDomainVerificationMethod] = useState<'manual' | 'cloudflare'>('manual');
   const [cloudflareToken, setCloudflareToken] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<string>('Initializing...');
   const [newDomainInput, setNewDomainInput] = useState('');
+  const [verificationToken, setVerificationToken] = useState('');
   const [dnsInstructions, setDnsInstructions] = useState<DNSInstruction[]>([]);
   const [connectedDomains, setConnectedDomains] = useState<any[]>([]);
   
@@ -326,19 +328,19 @@ export default function App() {
 
   const handleConnectDomain = async () => {
     if (!newDomainInput.includes('.')) return;
-    setDomainModalStep('scanning');
     
-    if (domainVerificationMethod === 'cloudflare') {
-      setTimeout(() => {
-         handleVerifyDNS(true);
-      }, 3000);
-      return;
-    }
+    // Generate a unique token for real verification
+    const token = `p3-verification=${Math.random().toString(36).substring(2, 12)}`;
+    setVerificationToken(token);
+    
+    setDomainModalStep('scanning');
+    setVerificationStatus('Generating Configuration...');
 
     try {
-      const instructions = await getDNSInstructions(newDomainInput);
+      // Pass the token so Gemini includes it in the instructions
+      const instructions = await getDNSInstructions(newDomainInput, token);
       setDnsInstructions(instructions);
-      setTimeout(() => setDomainModalStep('instructions'), 1500);
+      setDomainModalStep('instructions');
     } catch (err) {
       setDomainModalStep('input');
     }
@@ -346,17 +348,34 @@ export default function App() {
 
   const handleVerifyDNS = async (isCloudflare = false) => {
     setIsVerifying(true);
+    setVerificationStatus('Querying Global DNS...');
     
+    // Real DNS Check
+    const isVerified = await verifyDNSRecord(newDomainInput, verificationToken);
+    
+    if (!isVerified) {
+       setVerificationStatus('Record Not Found');
+       // In a production app, we would stop here. 
+       // For this "Waiting List" demo, we will allow it but show a warning toast in a real app.
+       // We will set verified: false in the DB for now unless we want to block the user.
+       // Let's enforce strictness for "is it actually connecting".
+       setIsVerifying(false);
+       alert(`Verification Failed. Could not find TXT record: ${verificationToken} on ${newDomainInput}. Please allow propagation time.`);
+       return;
+    }
+
+    setVerificationStatus('Securing Connection...');
+
     if (supabase && currentUser) {
       await supabase.from('domains').insert({
         user_id: currentUser.id,
         domain_name: newDomainInput,
         provider: isCloudflare ? 'cloudflare' : 'manual',
-        status: 'verified'
+        status: 'verified',
+        verification_record: verificationToken
       });
     }
 
-    await new Promise(r => setTimeout(r, 2000));
     setIsVerifying(false);
     
     if (supabase && currentUser) {
@@ -721,7 +740,7 @@ export default function App() {
         {domainModalStep === 'scanning' && (
            <div className="py-16 text-center space-y-4">
               <div className="w-12 h-12 rounded-full border-4 border-emerald-500 border-t-transparent animate-spin mx-auto"></div>
-              <p className="font-bold animate-pulse text-emerald-400">Verifying DNS...</p>
+              <p className="font-bold animate-pulse text-emerald-400">{verificationStatus}</p>
            </div>
         )}
         {domainModalStep === 'instructions' && (
@@ -975,41 +994,4 @@ export default function App() {
                       {state.accounts.map(acc => (
                          <Card key={acc.id} className="p-6 flex justify-between items-center">
                             <div className="flex items-center gap-4">
-                               <div className={`p-3 rounded-xl ${acc.status === 'connected' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
-                                  <Icons.Server className="w-6 h-6" />
-                               </div>
-                               <div>
-                                  <p className="font-bold text-white">{acc.email}</p>
-                                  <p className="text-xs text-slate-500 uppercase">{acc.host} • {acc.status}</p>
-                               </div>
-                            </div>
-                            <div className="flex gap-2">
-                               <button onClick={() => handleSyncAccount(acc.id)} className="p-2 hover:bg-slate-800 rounded-lg text-emerald-500"><Icons.Refresh className="w-5 h-5" /></button>
-                               <button onClick={() => removeAccount(acc.id)} className="p-2 hover:bg-slate-800 rounded-lg text-red-500"><Icons.Settings className="w-5 h-5" /></button>
-                            </div>
-                         </Card>
-                      ))}
-                      <button onClick={() => setShowAccountModal(true)} className="w-full py-4 border-2 border-dashed border-slate-800 rounded-2xl text-slate-500 font-bold uppercase hover:border-emerald-500 hover:text-emerald-500 transition-all">Connect New Node</button>
-                   </div>
-                </section>
-
-                <section>
-                   <h4 className="text-sm font-bold text-emerald-500 uppercase tracking-widest mb-4">Domains</h4>
-                   <div className="space-y-4">
-                      {connectedDomains.map(d => (
-                         <Card key={d.id} className="p-6 flex justify-between items-center">
-                            <div><p className="font-bold text-white">{d.name}</p><p className="text-xs text-slate-500 uppercase">{d.type}</p></div>
-                            <button onClick={() => removeDomain(d.id)} className="text-red-500 text-xs font-bold uppercase">Unlink</button>
-                         </Card>
-                      ))}
-                      <button onClick={() => setShowDomainModal(true)} className="w-full py-4 border-2 border-dashed border-slate-800 rounded-2xl text-slate-500 font-bold uppercase hover:border-emerald-500 hover:text-emerald-500 transition-all">Sync Domain</button>
-                   </div>
-                </section>
-             </div>
-          )}
-
-        </div>
-      </main>
-    </div>
-  );
-}
+                               <div className={`p-3 rounded-xl ${acc.status === 'connected' ? 'bg-emerald-500/10 text
