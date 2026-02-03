@@ -92,11 +92,6 @@ const PriorityBadge = ({ priority, darkMode }: { priority: Priority, darkMode: b
   return <Badge color={color} darkMode={darkMode}>{priority}</Badge>;
 };
 
-const StatusBadge = ({ status, darkMode }: { status: TicketStatus, darkMode: boolean }) => {
-  const color = status === 'resolved' ? 'green' : status === 'in-progress' ? 'blue' : 'amber';
-  return <Badge color={color} darkMode={darkMode}>{status.replace('-', ' ')}</Badge>;
-};
-
 const ToggleSwitch = ({ checked, onChange, darkMode }: { checked: boolean, onChange: () => void, darkMode: boolean }) => (
   <label className="relative inline-flex items-center cursor-pointer">
     <input type="checkbox" className="sr-only peer" checked={checked} onChange={onChange} />
@@ -133,6 +128,7 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [inboxViewMode, setInboxViewMode] = useState<'list' | 'detail'>('list');
+  const [currentUser, setCurrentUser] = useState<any>(null);
   
   // Modals & States
   const [showSupabaseConfigModal, setShowSupabaseConfigModal] = useState(false);
@@ -185,35 +181,71 @@ export default function App() {
 
     if (!supabase) return;
 
-    // 2. Check Session
+    // 2. Request Notification Permission
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    // 3. Check Session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsAuthenticated(!!session);
-      if (session) fetchData(session.user.id);
+      if (session) {
+        setCurrentUser(session.user);
+        fetchData(session.user.id);
+      }
     });
 
-    // 3. Listen for changes
+    // 4. Listen for changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setIsAuthenticated(!!session);
-      if (session) fetchData(session.user.id);
+      if (session) {
+        setCurrentUser(session.user);
+        fetchData(session.user.id);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
+  // Auto-Sync Effect
+  useEffect(() => {
+    if (!isAuthenticated || state.accounts.length === 0) return;
+    
+    const interval = setInterval(() => {
+      state.accounts.forEach(acc => {
+        if (acc.status === 'connected') {
+          handleSyncAccount(acc.id, true); // True for silent background sync
+        }
+      });
+    }, 120000); // Sync every 2 minutes
+
+    return () => clearInterval(interval);
+  }, [isAuthenticated, state.accounts]);
+
   const fetchData = async (userId: string) => {
     if (!supabase) return;
 
-    // Fetch Emails
-    const { data: emails } = await supabase.from('emails').select('*').order('received_at', { ascending: false });
-    // Fetch Domains
-    const { data: domains } = await supabase.from('domains').select('*');
-    // Fetch Tickets (optional for now, can use locals)
-    // Fetch Tasks (optional for now)
+    const [
+      { data: emails },
+      { data: domains },
+      { data: tickets },
+      { data: tasks },
+      { data: automations },
+      { data: accounts }
+    ] = await Promise.all([
+      supabase.from('emails').select('*').order('received_at', { ascending: false }),
+      supabase.from('domains').select('*'),
+      supabase.from('tickets').select('*').order('created_at', { ascending: false }),
+      supabase.from('tasks').select('*').order('created_at', { ascending: false }),
+      supabase.from('automations').select('*').order('created_at', { ascending: false }),
+      supabase.from('email_accounts').select('*')
+    ]);
 
     setState(prev => ({
       ...prev,
-      emails: emails ? emails.map(e => ({
+      emails: emails && emails.length > 0 ? emails.map(e => ({
         id: e.id,
+        accountId: e.account_id,
         from: e.from_address,
         subject: e.subject,
         content: e.body_text,
@@ -221,8 +253,41 @@ export default function App() {
         isRead: e.is_read,
         isAnalyzed: !!e.ai_summary,
         aiInsights: e.ai_summary ? JSON.parse(e.ai_summary) : undefined
-      })) : INITIAL_EMAILS, // Fallback to initial if empty for demo
-      // accounts...
+      })) : INITIAL_EMAILS,
+      tickets: tickets && tickets.length > 0 ? tickets.map(t => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        priority: t.priority,
+        status: t.status,
+        createdAt: t.created_at,
+        emailId: t.source_email_id
+      })) : INITIAL_TICKETS,
+      tasks: tasks && tasks.length > 0 ? tasks.map(t => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        dueDate: t.due_date
+      })) : INITIAL_TASKS,
+      automations: automations && automations.length > 0 ? automations.map(a => ({
+        id: a.id,
+        name: a.name,
+        condition: a.condition,
+        action: a.action,
+        isActive: a.is_active
+      })) : INITIAL_AUTOMATIONS,
+      accounts: accounts && accounts.length > 0 ? accounts.map(a => ({
+        id: a.id,
+        email: a.email_address,
+        host: a.host,
+        port: a.port,
+        type: a.protocol,
+        lastSync: a.last_sync_at,
+        status: a.status
+      })) : [],
+      activeView: prev.activeView,
+      isAnalyzing: false,
+      selectedEmailId: null
     }));
     
     if (domains) {
@@ -237,7 +302,7 @@ export default function App() {
 
   const handleSaveSupabaseConfig = () => {
     saveSupabaseConfig(sbConfig.url, sbConfig.key);
-    window.location.reload(); // Reload to re-initialize the supabase client export
+    window.location.reload();
   };
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
@@ -258,7 +323,6 @@ export default function App() {
     }));
     setInboxViewMode('detail');
     
-    // Update Read Status in DB
     if(supabase) {
        await supabase.from('emails').update({ is_read: true }).eq('id', id);
     }
@@ -275,7 +339,6 @@ export default function App() {
         isAnalyzing: false,
         emails: prev.emails.map(e => e.id === emailId ? { ...e, isAnalyzed: true, aiInsights: insights } : e)
       }));
-      // Save analysis to DB
       if (supabase) {
         await supabase.from('emails').update({
            ai_summary: JSON.stringify(insights),
@@ -325,32 +388,31 @@ export default function App() {
   const handleVerifyDNS = async (isCloudflare = false) => {
     setIsVerifying(true);
     
-    // Save to Supabase
-    if (supabase) {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from('domains').insert({
-          user_id: user.id,
-          domain_name: newDomainInput,
-          provider: isCloudflare ? 'cloudflare' : 'manual',
-          status: 'verified'
-        });
-      }
+    if (supabase && currentUser) {
+      await supabase.from('domains').insert({
+        user_id: currentUser.id,
+        domain_name: newDomainInput,
+        provider: isCloudflare ? 'cloudflare' : 'manual',
+        status: 'verified'
+      });
     }
 
     await new Promise(r => setTimeout(r, 2000));
     setIsVerifying(false);
     
-    // Refresh list locally (or re-fetch)
-    setConnectedDomains(prev => [
-      ...prev,
-      { 
-        id: `d-${Date.now()}`, 
-        name: newDomainInput, 
-        type: isCloudflare ? 'Cloudflare Sync' : 'Secondary Node', 
-        verified: true 
-      }
-    ]);
+    if (supabase && currentUser) {
+      fetchData(currentUser.id);
+    } else {
+      setConnectedDomains(prev => [
+        ...prev,
+        { 
+          id: `d-${Date.now()}`, 
+          name: newDomainInput, 
+          type: isCloudflare ? 'Cloudflare Sync' : 'Secondary Node', 
+          verified: true 
+        }
+      ]);
+    }
     setShowDomainModal(false);
     setDomainModalStep('input');
     setNewDomainInput('');
@@ -358,28 +420,27 @@ export default function App() {
     setDomainVerificationMethod('manual');
   };
 
-  const handleSyncAccount = async (accountId: string) => {
-    // Set status to syncing
-    setState(prev => ({
-      ...prev,
-      accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'syncing' } : a)
-    }));
+  const handleSyncAccount = async (accountId: string, background = false) => {
+    if (!background) {
+      setState(prev => ({
+        ...prev,
+        accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'syncing' } : a)
+      }));
+    }
 
     try {
       const account = state.accounts.find(a => a.id === accountId);
       if (!account) throw new Error("Account not found");
 
-      // Simulate network delay
       await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
 
       const newEmails: Email[] = [];
       const now = new Date().toISOString();
 
       // SIMULATION LOGIC for Demo Purposes
-      // In a real backend, this would be a server-side function connecting to IMAP
       if (account.email.toLowerCase() === 'admin@p3lending.space') {
         P3_LENDING_EMAILS.forEach(p3 => {
-          const exists = state.emails.some(e => e.subject === p3.subject); // Simple check
+          const exists = state.emails.some(e => e.subject === p3.subject);
           if (!exists) {
             newEmails.push({ ...p3, accountId, date: now });
           }
@@ -388,24 +449,30 @@ export default function App() {
         if (Math.random() > 0.3) {
             const id = `gen-${Date.now()}`;
             newEmails.push({
-            id,
-            accountId,
-            from: `newsletter@${account.email.split('@')[1] || 'generic.com'}`,
-            subject: 'Weekly Update',
-            content: 'Here is the latest news from your subscription.',
-            date: now,
-            isRead: false,
-            isAnalyzed: false
+              id,
+              accountId,
+              from: `newsletter@${account.email.split('@')[1] || 'generic.com'}`,
+              subject: 'Weekly Update',
+              content: 'Here is the latest news from your subscription.',
+              date: now,
+              isRead: false,
+              isAnalyzed: false
             });
         }
       }
 
-      // Save new emails to Supabase
-      if (supabase && newEmails.length > 0) {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
+      // Notify User
+      if (newEmails.length > 0 && Notification.permission === 'granted') {
+         new Notification('New Signal Detected', {
+            body: `Received ${newEmails.length} new transmission(s) from ${account.email}.`,
+            icon: '/vite.svg'
+         });
+      }
+
+      if (supabase && currentUser && newEmails.length > 0) {
            await supabase.from('emails').insert(newEmails.map(e => ({
-              user_id: user.id,
+              user_id: currentUser.id,
+              account_id: accountId,
               from_address: e.from,
               subject: e.subject,
               body_text: e.content,
@@ -413,11 +480,14 @@ export default function App() {
               is_read: e.isRead
            })));
            
-           // Re-fetch to get IDs
-           fetchData(user.id);
-        }
+           // Update account last_sync
+           await supabase.from('email_accounts').update({ 
+             last_sync_at: now,
+             status: 'connected'
+           }).eq('id', accountId);
+
+           fetchData(currentUser.id);
       } else {
-         // Local update only
          setState(prev => ({
            ...prev,
            accounts: prev.accounts.map(a => a.id === accountId ? { ...a, status: 'connected', lastSync: now } : a),
@@ -437,22 +507,32 @@ export default function App() {
     setAccountStatus('auth');
     await new Promise(r => setTimeout(r, 2000));
     
-    const newAccount: EmailAccount = {
-      id: `acc-${Date.now()}`,
-      email: accountForm.email,
-      host: accountForm.host || `imap.${accountForm.email.split('@')[1]}`,
-      port: accountForm.port,
-      type: 'imap',
-      status: 'connected',
-      lastSync: new Date().toISOString()
-    };
-
-    // Logic to insert into DB would go here
-    
-    setState(prev => ({
-      ...prev,
-      accounts: [...prev.accounts, newAccount]
-    }));
+    if (supabase && currentUser) {
+      await supabase.from('email_accounts').insert({
+        user_id: currentUser.id,
+        email_address: accountForm.email,
+        host: accountForm.host || `imap.${accountForm.email.split('@')[1]}`,
+        port: accountForm.port,
+        protocol: 'imap',
+        status: 'connected',
+        last_sync_at: new Date().toISOString()
+      });
+      fetchData(currentUser.id);
+    } else {
+      const newAccount: EmailAccount = {
+        id: `acc-${Date.now()}`,
+        email: accountForm.email,
+        host: accountForm.host || `imap.${accountForm.email.split('@')[1]}`,
+        port: accountForm.port,
+        type: 'imap',
+        status: 'connected',
+        lastSync: new Date().toISOString()
+      };
+      setState(prev => ({
+        ...prev,
+        accounts: [...prev.accounts, newAccount]
+      }));
+    }
     
     setAccountStatus('success');
     setTimeout(() => {
@@ -462,47 +542,148 @@ export default function App() {
     }, 1000);
   };
 
-  const removeAccount = (id: string) => {
-    setState(prev => ({
-      ...prev,
-      accounts: prev.accounts.filter(a => a.id !== id),
-      emails: prev.emails.filter(e => e.accountId !== id)
-    }));
+  const removeAccount = async (id: string) => {
+    if (supabase) {
+      await supabase.from('email_accounts').delete().eq('id', id);
+      fetchData(currentUser.id);
+    } else {
+      setState(prev => ({
+        ...prev,
+        accounts: prev.accounts.filter(a => a.id !== id),
+        emails: prev.emails.filter(e => e.accountId !== id)
+      }));
+    }
   };
 
-  const removeDomain = (id: string) => setConnectedDomains(prev => prev.filter(d => d.id !== id));
-  const removeEmail = (id: string) => setState(p => ({ ...p, emails: p.emails.filter(e => e.id !== id), selectedEmailId: p.selectedEmailId === id ? null : p.selectedEmailId }));
-  const removeTicket = (id: string) => setState(p => ({ ...p, tickets: p.tickets.filter(t => t.id !== id) }));
-  const removeTask = (id: string) => setState(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== id) }));
-  const removeAutomation = (id: string) => setState(p => ({ ...p, automations: p.automations.filter(a => a.id !== id) }));
-
-  const toggleTask = (taskId: string) => setState(p => ({
-    ...p, tasks: p.tasks.map(t => t.id === taskId ? { ...t, status: t.status === 'completed' ? 'pending' : 'completed' } : t)
-  }));
-
-  const addTask = (title: string, dueDate?: string) => {
-    const newTask: Task = { id: `tk-${Date.now()}`, title, status: 'pending', dueDate };
-    setState(p => ({ ...p, tasks: [newTask, ...p.tasks] }));
+  const removeDomain = async (id: string) => {
+    if (supabase) {
+      await supabase.from('domains').delete().eq('id', id);
+      fetchData(currentUser.id);
+    } else {
+      setConnectedDomains(prev => prev.filter(d => d.id !== id));
+    }
   };
 
-  const addTicket = (title: string, description: string, priority: Priority) => {
-    const newTicket: Ticket = { id: `t-${Date.now()}`, title, description, status: 'open', priority, createdAt: new Date().toISOString() };
-    setState(p => ({ ...p, tickets: [newTicket, ...p.tickets] }));
+  const removeEmail = async (id: string) => {
+    if (supabase) {
+      await supabase.from('emails').delete().eq('id', id);
+      setState(p => ({ ...p, emails: p.emails.filter(e => e.id !== id), selectedEmailId: p.selectedEmailId === id ? null : p.selectedEmailId }));
+    } else {
+      setState(p => ({ ...p, emails: p.emails.filter(e => e.id !== id), selectedEmailId: p.selectedEmailId === id ? null : p.selectedEmailId }));
+    }
+  };
+
+  const removeTicket = async (id: string) => {
+    if (supabase) {
+      await supabase.from('tickets').delete().eq('id', id);
+      fetchData(currentUser.id);
+    } else {
+      setState(p => ({ ...p, tickets: p.tickets.filter(t => t.id !== id) }));
+    }
+  };
+
+  const removeTask = async (id: string) => {
+    if (supabase) {
+      await supabase.from('tasks').delete().eq('id', id);
+      fetchData(currentUser.id);
+    } else {
+      setState(p => ({ ...p, tasks: p.tasks.filter(t => t.id !== id) }));
+    }
+  };
+
+  const removeAutomation = async (id: string) => {
+    if (supabase) {
+      await supabase.from('automations').delete().eq('id', id);
+      fetchData(currentUser.id);
+    } else {
+      setState(p => ({ ...p, automations: p.automations.filter(a => a.id !== id) }));
+    }
+  };
+
+  const toggleTask = async (taskId: string) => {
+    const task = state.tasks.find(t => t.id === taskId);
+    const newStatus = task?.status === 'completed' ? 'pending' : 'completed';
+    
+    if (supabase) {
+      await supabase.from('tasks').update({ status: newStatus }).eq('id', taskId);
+      setState(p => ({
+        ...p, tasks: p.tasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t)
+      }));
+    } else {
+      setState(p => ({
+        ...p, tasks: p.tasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t)
+      }));
+    }
+  };
+
+  const addTask = async (title: string, dueDate?: string) => {
+    if (supabase && currentUser) {
+       await supabase.from('tasks').insert({
+         user_id: currentUser.id,
+         title,
+         status: 'pending',
+         due_date: dueDate
+       });
+       fetchData(currentUser.id);
+    } else {
+      const newTask: Task = { id: `tk-${Date.now()}`, title, status: 'pending', dueDate };
+      setState(p => ({ ...p, tasks: [newTask, ...p.tasks] }));
+    }
+  };
+
+  const addTicket = async (title: string, description: string, priority: Priority) => {
+    if (supabase && currentUser) {
+      await supabase.from('tickets').insert({
+        user_id: currentUser.id,
+        title,
+        description,
+        priority,
+        status: 'open'
+      });
+      fetchData(currentUser.id);
+    } else {
+      const newTicket: Ticket = { id: `t-${Date.now()}`, title, description, status: 'open', priority, createdAt: new Date().toISOString() };
+      setState(p => ({ ...p, tickets: [newTicket, ...p.tickets] }));
+    }
   };
 
   const addEmail = (to: string, subject: string, content: string) => {
     const newEmail: Email = { id: `e-${Date.now()}`, from: to, subject, content, date: new Date().toISOString(), isRead: true, isAnalyzed: false };
     setState(p => ({ ...p, emails: [newEmail, ...p.emails] }));
+    // Note: Sent emails usually go to a different table or folder, omitted for this demo
   };
 
-  const addAutomation = (name: string, condition: string, action: string) => {
-    const newRule: AutomationRule = { id: `a-${Date.now()}`, name, condition, action, isActive: true };
-    setState(p => ({ ...p, automations: [newRule, ...p.automations] }));
+  const addAutomation = async (name: string, condition: string, action: string) => {
+    if (supabase && currentUser) {
+       await supabase.from('automations').insert({
+         user_id: currentUser.id,
+         name,
+         condition,
+         action,
+         is_active: true
+       });
+       fetchData(currentUser.id);
+    } else {
+      const newRule: AutomationRule = { id: `a-${Date.now()}`, name, condition, action, isActive: true };
+      setState(p => ({ ...p, automations: [newRule, ...p.automations] }));
+    }
   };
 
-  const toggleAutomation = (ruleId: string) => setState(p => ({
-    ...p, automations: p.automations.map(a => a.id === ruleId ? { ...a, isActive: !a.isActive } : a)
-  }));
+  const toggleAutomation = async (ruleId: string) => {
+     const rule = state.automations.find(a => a.id === ruleId);
+     const newState = !rule?.isActive;
+
+     if (supabase) {
+       await supabase.from('automations').update({ is_active: newState }).eq('id', ruleId);
+       setState(p => ({
+         ...p, automations: p.automations.map(a => a.id === ruleId ? { ...a, isActive: newState } : a)
+       }));
+     } else {
+       setState(p => ({
+         ...p, automations: p.automations.map(a => a.id === ruleId ? { ...a, isActive: newState } : a)
+       }));
+     }
+  };
 
   const switchView = (view: AppState['activeView']) => {
     setState(p => ({ ...p, activeView: view }));
@@ -523,6 +704,7 @@ export default function App() {
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut();
     setIsAuthenticated(false);
+    setState(prev => ({ ...prev, emails: [], tickets: [], tasks: [], automations: [], accounts: [] }));
   };
 
   if (!isAuthenticated && !showSupabaseConfigModal) {
@@ -650,13 +832,30 @@ export default function App() {
       {/* Manual Creation Modals */}
       <Modal isOpen={showTicketModal} onClose={() => setShowTicketModal(false)} title="New Support Node" isDarkMode={isDarkMode}>
         <div className="space-y-4">
-          <input type="text" placeholder="Title" className="w-full p-4 rounded-xl border font-bold" value={ticketForm.title} onChange={e => setTicketForm({...ticketForm, title: e.target.value})} />
-          <textarea placeholder="Description" className="w-full p-4 rounded-xl border font-medium" rows={3} value={ticketForm.description} onChange={e => setTicketForm({...ticketForm, description: e.target.value})} />
-          <select className="w-full p-4 rounded-xl border font-bold" value={ticketForm.priority} onChange={e => setTicketForm({...ticketForm, priority: e.target.value as Priority})}>
+          <input type="text" placeholder="Title" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={ticketForm.title} onChange={e => setTicketForm({...ticketForm, title: e.target.value})} />
+          <textarea placeholder="Description" className={`w-full p-4 rounded-xl border font-medium ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} rows={3} value={ticketForm.description} onChange={e => setTicketForm({...ticketForm, description: e.target.value})} />
+          <select className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={ticketForm.priority} onChange={e => setTicketForm({...ticketForm, priority: e.target.value as Priority})}>
             <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option>
           </select>
           <button className="w-full py-4 bg-sky-500 text-white rounded-xl font-black" onClick={() => { addTicket(ticketForm.title, ticketForm.description, ticketForm.priority); setShowTicketModal(false); }}>Deploy Node</button>
         </div>
+      </Modal>
+
+      <Modal isOpen={showTaskModal} onClose={() => setShowTaskModal(false)} title="New Logic Task" isDarkMode={isDarkMode}>
+         <div className="space-y-4">
+            <input type="text" placeholder="Task Title" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={taskForm.title} onChange={e => setTaskForm({...taskForm, title: e.target.value})} />
+            <input type="date" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={taskForm.dueDate} onChange={e => setTaskForm({...taskForm, dueDate: e.target.value})} />
+            <button className="w-full py-4 bg-indigo-500 text-white rounded-xl font-black" onClick={() => { addTask(taskForm.title, taskForm.dueDate); setShowTaskModal(false); }}>Deploy Task</button>
+         </div>
+      </Modal>
+
+      <Modal isOpen={showAutomationModal} onClose={() => setShowAutomationModal(false)} title="New Flow Rule" isDarkMode={isDarkMode}>
+         <div className="space-y-4">
+            <input type="text" placeholder="Rule Name (e.g., Auto-Label Billing)" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={automationForm.name} onChange={e => setAutomationForm({...automationForm, name: e.target.value})} />
+            <input type="text" placeholder="Condition (e.g., Subject contains 'Invoice')" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={automationForm.condition} onChange={e => setAutomationForm({...automationForm, condition: e.target.value})} />
+            <input type="text" placeholder="Action (e.g., Create Urgent Ticket)" className={`w-full p-4 rounded-xl border font-bold ${isDarkMode ? 'bg-slate-950 border-slate-800' : ''}`} value={automationForm.action} onChange={e => setAutomationForm({...automationForm, action: e.target.value})} />
+            <button className="w-full py-4 bg-fuchsia-600 text-white rounded-xl font-black" onClick={() => { addAutomation(automationForm.name, automationForm.condition, automationForm.action); setShowAutomationModal(false); }}>Init Flow</button>
+         </div>
       </Modal>
 
       {/* Sidebar */}

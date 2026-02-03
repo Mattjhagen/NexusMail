@@ -76,6 +76,17 @@ create table if not exists public.tasks (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- 7. AUTOMATIONS
+create table if not exists public.automations (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references public.profiles(id) not null,
+  name text not null,
+  condition text not null,
+  action text not null,
+  is_active boolean default true,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
 -- ENABLE RLS
 alter table public.profiles enable row level security;
 alter table public.domains enable row level security;
@@ -83,6 +94,7 @@ alter table public.email_accounts enable row level security;
 alter table public.emails enable row level security;
 alter table public.tickets enable row level security;
 alter table public.tasks enable row level security;
+alter table public.automations enable row level security;
 
 -- POLICIES
 -- Profiles
@@ -101,6 +113,9 @@ create policy "Users can manage own emails" on public.emails for all using (auth
 -- Tickets & Tasks
 create policy "Users can manage own tickets" on public.tickets for all using (auth.uid() = user_id);
 create policy "Users can manage own tasks" on public.tasks for all using (auth.uid() = user_id);
+
+-- Automations
+create policy "Users can manage own automations" on public.automations for all using (auth.uid() = user_id);
 
 -- TRIGGERS
 create or replace function public.handle_new_user()
