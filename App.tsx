@@ -334,7 +334,10 @@ export default function App() {
   };
 
   const handleConnectDomain = async () => {
-    if (!newDomainInput.includes('.')) return;
+    if (!newDomainInput.includes('.')) {
+      alert('Please enter a valid domain (e.g., example.com)');
+      return;
+    }
     
     // Generate a unique token for real verification
     const token = `p3-verification=${Math.random().toString(36).substring(2, 12)}`;
@@ -354,8 +357,14 @@ export default function App() {
       } else {
          setDomainModalStep('instructions');
       }
-    } catch (err) {
-      setDomainModalStep('input');
+    } catch (err: any) {
+      console.error("Domain connection error:", err);
+      // Give feedback but don't get stuck in scanning
+      setVerificationStatus("Error: " + (err.message || "Unknown error"));
+      setTimeout(() => {
+        setDomainModalStep('input');
+        alert("Failed to connect domain. " + (err.message || "Please check your input and try again."));
+      }, 1500);
     }
   };
 

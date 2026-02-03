@@ -2,8 +2,19 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { AIInsight } from "../types";
 
+const getApiKey = () => {
+  try {
+    return process.env.API_KEY;
+  } catch (e) {
+    return undefined;
+  }
+};
+
 export const analyzeEmail = async (emailContent: string, subject: string): Promise<AIInsight> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("API Key missing");
+  
+  const ai = new GoogleGenAI({ apiKey });
   
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
@@ -53,7 +64,10 @@ export const analyzeEmail = async (emailContent: string, subject: string): Promi
 };
 
 export const draftReply = async (emailContent: string, context: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  if (!apiKey) return "Error: API Key missing.";
+
+  const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
     contents: `Draft a professional and helpful reply to the following email.
@@ -76,40 +90,43 @@ export interface DNSInstruction {
 
 // Updated to accept a specific verification token to enforce real checks
 export const getDNSInstructions = async (domain: string, verificationToken: string): Promise<DNSInstruction[]> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `Generate the required DNS records for the domain "${domain}" to connect it to NexusMail AI services.
+  try {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("API Key not found");
+
+    const ai = new GoogleGenAI({ apiKey });
     
-    CRITICAL REQUIREMENT:
-    You MUST include a TXT record with the EXACT content: "${verificationToken}" for domain ownership verification.
-    
-    Also include MX for mail delivery (mx.p3lending.space) and TXT for SPF (v=spf1 include:_spf.p3lending.space ~all).`,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            type: { type: Type.STRING, enum: ["MX", "TXT", "CNAME"] },
-            name: { type: Type.STRING },
-            content: { type: Type.STRING },
-            priority: { type: Type.NUMBER },
-            purpose: { type: Type.STRING }
-          },
-          required: ["type", "name", "content", "purpose"]
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `Generate the required DNS records for the domain "${domain}" to connect it to NexusMail AI services.
+      
+      CRITICAL REQUIREMENT:
+      You MUST include a TXT record with the EXACT content: "${verificationToken}" for domain ownership verification.
+      
+      Also include MX for mail delivery (mx.p3lending.space) and TXT for SPF (v=spf1 include:_spf.p3lending.space ~all).`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING, enum: ["MX", "TXT", "CNAME"] },
+              name: { type: Type.STRING },
+              content: { type: Type.STRING },
+              priority: { type: Type.NUMBER },
+              purpose: { type: Type.STRING }
+            },
+            required: ["type", "name", "content", "purpose"]
+          }
         }
       }
-    }
-  });
+    });
 
-  try {
     const jsonStr = response.text?.trim() || "[]";
     return JSON.parse(jsonStr) as DNSInstruction[];
   } catch (err) {
-    console.error("Failed to generate DNS instructions", err);
+    console.warn("Failed to generate DNS instructions via AI, using fallback.", err);
     // Fallback if AI fails, ensuring the critical token is present
     return [
       { type: 'TXT', name: '@', content: verificationToken, purpose: 'Domain Ownership Verification' },
