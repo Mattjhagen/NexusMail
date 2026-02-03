@@ -27,14 +27,22 @@ serve(async (req) => {
       apiUrl += `&command=search&domain0=${domain}&show_price=1`;
     } else if (action === 'register') {
       // Register domain (Uses account balance)
-      // Note: In production, you might want to add currency params or duration
       apiUrl += `&command=register&domain=${domain}&duration=1`;
     } else {
       throw new Error("Invalid action");
     }
 
-    // Call Dynadot
-    const response = await fetch(apiUrl);
+    // Call Dynadot with User-Agent to avoid blocking
+    const response = await fetch(apiUrl, {
+      headers: {
+        'User-Agent': 'NexusMailPro/1.0 (Deno Edge Function)'
+      }
+    });
+    
+    if (!response.ok) {
+       throw new Error(`Dynadot API Network Error: ${response.statusText}`);
+    }
+
     const xmlText = await response.text();
 
     // Parse XML to JSON
@@ -46,14 +54,17 @@ serve(async (req) => {
     
     if (action === 'search') {
       const searchResponse = parsed.SearchResponse;
-      if (searchResponse.ResponseCode !== 0) {
-         // Dynadot returns non-zero code for errors, but sometimes '0' just means the request was received
-         // Check Status
+      const header = searchResponse?.SearchHeader;
+
+      if (header && header.ResponseCode != 0) {
+         // API returned an error code
+         const err = header.Error || "Unknown Search Error";
+         return new Response(JSON.stringify({ error: err }), { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+         });
       }
       
-      const searchResults = searchResponse.SearchResults;
-      // Handle case where API might return array or single object, fast-xml-parser handles this usually but good to check structure
-      // For single domain search (domain0):
+      const searchResults = searchResponse?.SearchResults;
       const item = searchResults?.SearchResult;
       
       if (item) {
@@ -64,14 +75,26 @@ serve(async (req) => {
           status: item.Status
         };
       } else {
-        throw new Error("Invalid response from Dynadot");
+         // If structure is unexpected but no explicit error code
+         result = { error: "Invalid response structure from Dynadot" };
       }
     } 
     else if (action === 'register') {
       const regResponse = parsed.RegisterResponse;
-      const regResult = regResponse.RegisterResult;
+      const header = regResponse?.RegisterHeader;
+
+      if (header && header.ResponseCode != 0) {
+         // Extract API specific error (e.g., "Insufficient funds", "Invalid Domain")
+         const err = header.Error || "Registration failed at API gateway";
+         // Return 200 with error field so client can display it
+         return new Response(JSON.stringify({ success: false, error: err }), { 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+         });
+      }
+
+      const regResult = regResponse?.RegisterResult;
       
-      if (regResponse.ResponseCode == 0 && regResult.Success === 'yes') {
+      if (regResult && regResult.Success === 'yes') {
         result = {
           success: true,
           domain: regResult.DomainName,
@@ -79,8 +102,8 @@ serve(async (req) => {
           orderId: regResult.OrderId
         };
       } else {
-        // Error handling
-        const err = regResponse.ResponseError || "Registration failed";
+         // Fallback error
+        const err = regResponse?.ResponseError || "Registration failed";
         result = { success: false, error: err };
       }
     }
@@ -90,8 +113,12 @@ serve(async (req) => {
     });
 
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), { 
-      status: 400, 
+    // Return 200 for handled logic errors to distinguish from system crashes, 
+    // unless it's a critical failure which might throw 400.
+    // Here we choose to return error in body for frontend to decide.
+    console.error("Handler Error:", err);
+    return new Response(JSON.stringify({ error: err.message || "Internal Server Error" }), { 
+      status: 200, 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   }
