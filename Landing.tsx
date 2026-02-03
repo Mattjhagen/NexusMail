@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { NexusLogoSVG } from './App';
+import { P3LogoSVG } from './App';
 import { supabase } from './lib/supabase';
 
 export default function Landing({ onLogin }: { onLogin: () => void }) {
@@ -14,7 +14,7 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supabase) {
-      setError("System database not connected. Please configure keys in dashboard.");
+      setError("Database not connected.");
       return;
     }
     
@@ -35,21 +35,16 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
           email,
           password,
           options: {
-            data: {
-              full_name: email.split('@')[0], // Default name
-            }
+            data: { full_name: email.split('@')[0] }
           }
         });
         if (error) throw error;
-
-        // Check if session is missing (implies email verification is required)
         if (data.user && !data.session) {
-          setMessage("Account created! Please check your email to confirm registration.");
-          setIsLogin(true); // Switch to login view
+          setMessage("Check your email to verify account.");
+          setIsLogin(true);
           setIsLoading(false);
           return;
         }
-        
         onLogin(); 
       }
     } catch (err: any) {
@@ -60,111 +55,52 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
   };
 
   return (
-    <div className="min-h-screen bg-[#020617] text-white flex flex-col relative overflow-hidden font-sans">
-      {/* Background Gradients */}
-      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-sky-500/10 rounded-full blur-[120px]"></div>
-      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-fuchsia-600/10 rounded-full blur-[120px]"></div>
+    <div className="min-h-screen bg-[#020617] text-white flex flex-col items-center justify-center font-sans relative overflow-hidden">
+      {/* Background Grid */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#8080800a_1px,transparent_1px),linear-gradient(to_bottom,#8080800a_1px,transparent_1px)] bg-[size:24px_24px]"></div>
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-[128px]"></div>
 
-      {/* Nav */}
-      <nav className="relative z-10 px-8 py-6 flex justify-between items-center border-b border-white/5 bg-white/5 backdrop-blur-md">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8"><NexusLogoSVG /></div>
-          <span className="font-bold tracking-tight text-xl">NexusMail AI</span>
-        </div>
-        <button onClick={() => setIsLogin(true)} className="px-5 py-2 rounded-full border border-white/10 hover:bg-white/10 transition-all text-sm font-bold">
-          Client Portal
-        </button>
-      </nav>
+      <div className="relative z-10 w-full max-w-md p-8">
+         <div className="flex flex-col items-center mb-10">
+            <div className="w-20 h-20 mb-6"><P3LogoSVG /></div>
+            <h1 className="text-3xl font-black text-white text-center">P3 Lending</h1>
+            <p className="text-sm font-bold text-emerald-500 uppercase tracking-widest mt-2">Internal Staff Portal</p>
+         </div>
 
-      <div className="flex-1 flex items-center justify-center relative z-10 px-4">
-        <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-20 items-center">
-          
-          {/* Hero Content */}
-          <div className="space-y-8">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-bold uppercase tracking-widest animate-fade-in-up">
-              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
-              v2.6 Enterprise Live
-            </div>
-            <h1 className="text-5xl md:text-7xl font-black tracking-tighter leading-[1.1]">
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-sky-400 via-indigo-400 to-fuchsia-400">Neural Logic</span><br/>
-              for Business Comms.
-            </h1>
-            <p className="text-lg text-slate-400 max-w-lg leading-relaxed">
-              NexusMail connects your custom domains to a Gemini 3 neural engine. We don't just host email; we extract tasks, automate support tickets, and execute business logic in real-time.
-            </p>
-          </div>
+         <div className="bg-[#111] border border-slate-800 rounded-3xl p-8 shadow-2xl">
+            {message && <div className="mb-6 p-3 bg-emerald-900/30 border border-emerald-500/30 rounded-lg text-emerald-400 text-xs font-bold text-center">{message}</div>}
+            {error && <div className="mb-6 p-3 bg-red-900/30 border border-red-500/30 rounded-lg text-red-400 text-xs font-bold text-center">{error}</div>}
 
-          {/* Login Card */}
-          <div className="relative group">
-            <div className="absolute inset-0 bg-gradient-to-r from-sky-500 to-fuchsia-600 rounded-[2rem] blur-xl opacity-20 group-hover:opacity-30 transition-opacity"></div>
-            <div className="relative bg-[#0f172a] border border-white/10 p-8 md:p-12 rounded-[2rem] shadow-2xl">
-              <div className="mb-8">
-                <h2 className="text-2xl font-bold mb-2">{isLogin ? 'Welcome back' : 'Initialize Node'}</h2>
-                <p className="text-slate-400 text-sm">{isLogin ? 'Authenticate to access your neural dashboard.' : 'Deploy a new business logic instance.'}</p>
-              </div>
-              
-              {message && (
-                <div className="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 text-xs font-bold flex items-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
-                  {message}
-                </div>
-              )}
-
-              {error && (
-                <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs font-bold">
-                  {error}
-                </div>
-              )}
-
-              <form onSubmit={handleSubmit} className="space-y-5">
-                <div>
-                  <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Work Email</label>
+            <form onSubmit={handleSubmit} className="space-y-4">
+               <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-2 block">Staff Email</label>
                   <input 
-                    type="email" 
-                    required 
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-[#020617] border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-sky-500 transition-colors font-medium" 
-                    placeholder="name@company.com" 
+                     type="email" required 
+                     value={email} onChange={e => setEmail(e.target.value)}
+                     className="w-full p-4 rounded-xl bg-[#0a0a0a] border border-slate-800 text-white focus:border-emerald-500 outline-none transition-colors"
+                     placeholder="name@p3lending.space"
                   />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Password</label>
+               </div>
+               <div>
+                  <label className="text-[10px] font-bold uppercase text-slate-500 mb-2 block">Secure Key</label>
                   <input 
-                    type="password" 
-                    required 
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-[#020617] border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-sky-500 transition-colors font-medium" 
-                    placeholder="••••••••••••" 
+                     type="password" required 
+                     value={password} onChange={e => setPassword(e.target.value)}
+                     className="w-full p-4 rounded-xl bg-[#0a0a0a] border border-slate-800 text-white focus:border-emerald-500 outline-none transition-colors"
+                     placeholder="••••••••••••"
                   />
-                </div>
-                
-                <button 
-                  type="submit" 
-                  disabled={isLoading}
-                  className="w-full bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold py-4 rounded-xl transition-all transform active:scale-[0.98] relative overflow-hidden"
-                >
-                  {isLoading ? (
-                    <div className="flex items-center justify-center gap-2">
-                       <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                       <span>{isLogin ? 'Authenticating...' : 'Registering...'}</span>
-                    </div>
-                  ) : (
-                    <span>{isLogin ? 'Access Dashboard' : 'Create Account'}</span>
-                  )}
-                </button>
-              </form>
+               </div>
+               <button type="submit" disabled={isLoading} className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold uppercase tracking-widest transition-all">
+                  {isLoading ? 'Verifying...' : (isLogin ? 'Access System' : 'Register Node')}
+               </button>
+            </form>
 
-              <div className="mt-8 text-center">
-                <button onClick={() => { setIsLogin(!isLogin); setError(null); setMessage(null); }} className="text-sm text-slate-400 hover:text-white transition-colors">
-                  {isLogin ? "Don't have an account? Deploy Node" : "Already verified? Sign In"}
-                </button>
-              </div>
+            <div className="mt-6 text-center">
+               <button onClick={() => { setIsLogin(!isLogin); setError(null); }} className="text-xs text-slate-500 hover:text-emerald-400 font-bold uppercase tracking-wide">
+                  {isLogin ? "New Staff? Register" : "Have Access? Login"}
+               </button>
             </div>
-          </div>
-
-        </div>
+         </div>
       </div>
     </div>
   );
