@@ -84,6 +84,12 @@ const Card = ({ children, className = "" }: { children: React.ReactNode, classNa
   </div>
 );
 
+// Extended type for UI state
+interface DNSInstructionWithStatus extends DNSInstruction {
+  status?: 'created' | 'exists' | 'failed' | 'verified';
+  error?: string;
+}
+
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -116,7 +122,7 @@ export default function App() {
   const [verificationStatus, setVerificationStatus] = useState<string>('Initializing...');
   const [newDomainInput, setNewDomainInput] = useState('');
   const [verificationToken, setVerificationToken] = useState('');
-  const [dnsInstructions, setDnsInstructions] = useState<DNSInstruction[]>([]);
+  const [dnsInstructions, setDnsInstructions] = useState<DNSInstructionWithStatus[]>([]);
   const [connectedDomains, setConnectedDomains] = useState<any[]>([]);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   
@@ -383,7 +389,15 @@ export default function App() {
 
        if (error) throw error;
        
+       if (data.results) {
+          // Update instructions with results status (e.g. 'created', 'exists', 'failed')
+          setDnsInstructions(data.results);
+       }
+       
        setVerificationStatus('Cloudflare Sync Complete.');
+       
+       // Move to instructions step to show visual status instead of closing immediately
+       setDomainModalStep('instructions');
        
        if (currentUser) {
          await supabase.from('domains').insert({
@@ -395,14 +409,6 @@ export default function App() {
          });
          await fetchData(currentUser.id);
        }
-       
-       setTimeout(() => {
-          setShowDomainModal(false);
-          setDomainModalStep('input');
-          setNewDomainInput('');
-          // Switch to settings view to see the new domain
-          setState(prev => ({ ...prev, activeView: 'settings' }));
-       }, 1500);
 
      } catch (err: any) {
        console.error(err);
@@ -427,7 +433,13 @@ export default function App() {
        return;
     }
 
+    // Mark the verification token record as verified in UI
+    setDnsInstructions(prev => prev.map(d => 
+       d.content.includes(verificationToken) ? { ...d, status: 'verified' } : d
+    ));
+
     setVerificationStatus('Securing Connection...');
+    await new Promise(resolve => setTimeout(resolve, 800));
 
     await saveDomainToDb('verified');
   };
@@ -438,6 +450,14 @@ export default function App() {
     setVerificationStatus('Verifying configuration...');
     
     let isVerified = await verifyDNSRecord(newDomainInput, verificationToken);
+    
+    if (isVerified) {
+       // Visual update
+       setDnsInstructions(prev => prev.map(d => 
+          d.content.includes(verificationToken) ? { ...d, status: 'verified' } : d
+       ));
+       await new Promise(resolve => setTimeout(resolve, 500));
+    }
     
     if (!isVerified) {
        const confirmForce = window.confirm(
@@ -854,11 +874,18 @@ export default function App() {
         {domainModalStep === 'instructions' && (
           <div className="space-y-6">
             {dnsInstructions.map((dns, idx) => (
-              <div key={idx} className="p-4 rounded-xl bg-[#1a1a1a] border border-slate-800 flex justify-between items-start group">
+              <div key={idx} className={`p-4 rounded-xl bg-[#1a1a1a] border flex justify-between items-start group transition-all ${dns.status === 'failed' ? 'border-red-500/50' : dns.status === 'created' || dns.status === 'verified' ? 'border-emerald-500/50' : 'border-slate-800'}`}>
                 <div className="flex-1 min-w-0 pr-4">
-                  <Badge color="blue">{dns.type}</Badge>
+                  <div className="flex items-center gap-2 mb-1">
+                     <Badge color="blue">{dns.type}</Badge>
+                     {dns.status === 'created' && <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1"><Icons.CheckCircle className="w-3 h-3" /> Synced</span>}
+                     {dns.status === 'exists' && <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">Exists</span>}
+                     {dns.status === 'verified' && <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1"><Icons.CheckCircle className="w-3 h-3" /> Verified</span>}
+                     {dns.status === 'failed' && <span className="text-[10px] font-bold text-red-400 flex items-center gap-1">Failed</span>}
+                  </div>
                   <div className="mt-2 text-[10px] font-mono text-slate-400">NAME: {dns.name}</div>
                   <div className="text-[10px] font-mono text-slate-400 break-all">VALUE: {dns.content}</div>
+                  {dns.error && <div className="text-[10px] text-red-400 mt-2 font-mono bg-red-500/10 p-1 rounded">{dns.error}</div>}
                 </div>
                 <button 
                   onClick={() => handleCopy(dns.content, idx)}
@@ -1044,7 +1071,7 @@ export default function App() {
                       {selectedEmail.aiInsights && (
                          <div className="flex-1 overflow-y-auto p-8 bg-[#111]">
                             <div className="grid grid-cols-2 gap-6">
-                               <div className="p-6 rounded-2xl bg-[#0a0a0a] border border-slate-800">
+                                <div className="p-6 rounded-2xl bg-[#0a0a0a] border border-slate-800">
                                   <h4 className="text-xs font-bold text-emerald-500 uppercase tracking-widest mb-4">Sentiment Analysis</h4>
                                   <div className="text-sm font-medium text-white mb-2 capitalize">{selectedEmail.aiInsights.sentiment}</div>
                                   <p className="text-xs text-slate-500">{selectedEmail.aiInsights.summary}</p>
