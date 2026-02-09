@@ -1,5 +1,5 @@
 {
-  "name": "NexusMailPro",
+  "name": "NexusMail",
   "description": "An intelligent email management platform for custom domains that automates task extraction and ticket creation using Gemini 3.",
   "requestFramePermissions": [
     "camera",

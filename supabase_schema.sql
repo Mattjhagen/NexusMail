@@ -35,6 +35,7 @@ create table if not exists public.email_accounts (
   protocol text check (protocol in ('imap', 'pop3')) default 'imap',
   status text check (status in ('connected', 'error', 'syncing')) default 'connected',
   last_sync_at timestamp with time zone,
+  last_error text,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -98,24 +99,18 @@ alter table public.tasks enable row level security;
 alter table public.automations enable row level security;
 
 -- POLICIES
--- Profiles
 create policy "Users can view own profile" on public.profiles for select using (auth.uid() = id);
 create policy "Users can update own profile" on public.profiles for update using (auth.uid() = id);
 
--- Domains
 create policy "Users can manage own domains" on public.domains for all using (auth.uid() = user_id);
 
--- Email Accounts
 create policy "Users can manage own accounts" on public.email_accounts for all using (auth.uid() = user_id);
 
--- Emails
 create policy "Users can manage own emails" on public.emails for all using (auth.uid() = user_id);
 
--- Tickets & Tasks
 create policy "Users can manage own tickets" on public.tickets for all using (auth.uid() = user_id);
 create policy "Users can manage own tasks" on public.tasks for all using (auth.uid() = user_id);
 
--- Automations
 create policy "Users can manage own automations" on public.automations for all using (auth.uid() = user_id);
 
 -- TRIGGERS
@@ -128,16 +123,18 @@ begin
 end;
 $$ language plpgsql security definer;
 
--- Recreate trigger to ensure it exists
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
 
--- MIGRATION SAFEGUARD: Add columns if they don't exist (for existing deployments)
+-- MIGRATION SAFEGUARD
 do $$
 begin
   if not exists (select 1 from information_schema.columns where table_name='email_accounts' and column_name='auth_token') then
     alter table public.email_accounts add column auth_token text;
+  end if;
+  if not exists (select 1 from information_schema.columns where table_name='email_accounts' and column_name='last_error') then
+    alter table public.email_accounts add column last_error text;
   end if;
 end $$;

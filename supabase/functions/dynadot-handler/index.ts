@@ -2,13 +2,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { XMLParser } from "npm:fast-xml-parser@4.3.2";
 
+declare const Deno: any;
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-
-// Keys from configuration
-const DYNADOT_API_KEY = "7r6W8ANI7T8W9KJmu8WI7i81C"; 
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -20,7 +19,10 @@ serve(async (req) => {
 
     if (!domain) throw new Error("Domain is required");
 
-    let apiUrl = `https://api.dynadot.com/api3.xml?key=${DYNADOT_API_KEY}`;
+    // Attempt to get API Key from Environment, fall back to hardcoded if testing
+    const API_KEY = Deno.env.get('DYNADOT_API_KEY') || "7r6W8ANI7T8W9KJmu8WI7i81C";
+
+    let apiUrl = `https://api.dynadot.com/api3.xml?key=${API_KEY}`;
 
     if (action === 'search') {
       // Search for domain availability and price
@@ -59,6 +61,7 @@ serve(async (req) => {
       if (header && header.ResponseCode != 0) {
          // API returned an error code
          const err = header.Error || "Unknown Search Error";
+         // Explicitly return error so frontend knows it failed
          return new Response(JSON.stringify({ error: err }), { 
             headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
          });
@@ -113,9 +116,6 @@ serve(async (req) => {
     });
 
   } catch (err: any) {
-    // Return 200 for handled logic errors to distinguish from system crashes, 
-    // unless it's a critical failure which might throw 400.
-    // Here we choose to return error in body for frontend to decide.
     console.error("Handler Error:", err);
     return new Response(JSON.stringify({ error: err.message || "Internal Server Error" }), { 
       status: 200, 

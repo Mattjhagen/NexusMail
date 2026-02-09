@@ -83,30 +83,17 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
         body: { action: 'search', domain: domainQuery }
       });
 
-      if (error) throw error; // Network error triggers catch -> simulation
+      if (error) throw error; 
       
-      // If the API returns a logical error (e.g. invalid domain syntax), we show it
-      // unless it's a generic parsing error which might mean we should simulate.
-      if (data.error && !data.domain) {
-         console.warn("API returned logic error:", data.error);
-         // For search, we might still want to simulate if the API key is just broken
+      if (data.error) {
          throw new Error(data.error);
       }
 
       setSearchResult(data);
     } catch (err: any) {
-      console.warn("API Error, switching to simulation:", err);
-      // FALLBACK: Simulate a successful search result if the backend fails
-      await new Promise(resolve => setTimeout(resolve, 1200));
-      
-      setSearchResult({
-        domain: domainQuery,
-        available: true,
-        price: "14.99",
-        status: "available_simulated"
-      });
-      // Clear error so the user doesn't see "Failed to send request"
-      setError(null); 
+      console.error("Domain Search Failed:", err);
+      setError(err.message || "Failed to contact domain registry.");
+      setSearchResult(null);
     } finally {
       setIsSearching(false);
     }
@@ -128,11 +115,9 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
         body: { action: 'register', domain: searchResult.domain }
       });
 
-      if (error) throw error; // Network error -> Simulate
+      if (error) throw error;
 
       if (data.error) {
-         // Real API Error (e.g., Insufficient Funds)
-         // We do NOT simulate here, because the API answered explicitly.
          setPurchaseStatus('failed');
          setError(data.error);
          return;
@@ -145,11 +130,9 @@ export default function Landing({ onLogin }: { onLogin: () => void }) {
         setPurchaseStatus('failed');
       }
     } catch (err: any) {
-       console.warn("API Error during purchase, switching to simulation:", err);
-       // FALLBACK: Simulate a successful purchase ONLY if the backend itself failed/crashed
-       await new Promise(resolve => setTimeout(resolve, 1500));
-       setPurchaseStatus('success');
-       setError(null);
+       console.error("Purchase Failed:", err);
+       setPurchaseStatus('failed');
+       setError(err.message || "Transaction failed at gateway.");
     }
   };
 

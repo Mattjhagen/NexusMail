@@ -18,9 +18,17 @@ export const analyzeEmail = async (emailContent: string, subject: string): Promi
   
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: `Analyze the following email and extract structured insights.
+    contents: `Analyze the following email and extract structured insights for a business automation system.
+    
     Subject: ${subject}
-    Content: ${emailContent}`,
+    Content: ${emailContent}
+    
+    Instructions:
+    1. Summarize the email in 1 sentence.
+    2. Determine sentiment.
+    3. Extract actionable tasks (e.g., "Reply to Sarah", "Send Invoice").
+    4. If the email contains a complaint, bug report, urgent issue, or requires technical support, suggest a Ticket.
+    `,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -46,7 +54,7 @@ export const analyzeEmail = async (emailContent: string, subject: string): Promi
                 enum: ["low", "medium", "high", "urgent"]
               }
             },
-            description: "If an issue needs support tracking, suggest a ticket title and priority."
+            description: "Optional. Only populate if this email should be converted into a support ticket."
           }
         },
         required: ["summary", "sentiment", "suggestedTasks"]
