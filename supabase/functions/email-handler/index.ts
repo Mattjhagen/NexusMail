@@ -4,6 +4,8 @@ import nodemailer from "npm:nodemailer@6.9.7";
 import Imap from "npm:imap-simple@5.1.0";
 import { simpleParser } from "npm:mailparser@3.6.5";
 
+declare const Deno: any;
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
