@@ -32,7 +32,7 @@ create table if not exists public.email_accounts (
   auth_token text, -- Stores the app password/token
   host text not null,
   port int not null,
-  protocol text check (protocol in ('imap', 'pop3')) default 'imap',
+  protocol text check (protocol in ('imap', 'pop3', 'sendgrid')) default 'imap',
   status text check (status in ('connected', 'error', 'syncing')) default 'connected',
   last_sync_at timestamp with time zone,
   last_error text,

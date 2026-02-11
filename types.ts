@@ -7,7 +7,7 @@ export interface EmailAccount {
   email: string;
   host: string;
   port: number;
-  type: 'imap' | 'pop3';
+  type: 'imap' | 'pop3' | 'sendgrid';
   lastSync: string;
   status: 'connected' | 'error' | 'syncing';
 }

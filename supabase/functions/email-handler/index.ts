@@ -66,7 +66,7 @@ serve(async (req) => {
         .eq('id', id)
         .eq('user_id', user.id)
         .single();
-      
+
       if (error || !data) throw new Error('Account not found or access denied');
       return data;
     };
@@ -74,19 +74,42 @@ serve(async (req) => {
     // --- ACTION: TEST CONNECTION ---
     if (action === 'test') {
       console.log(`Testing connection for ${requestConfig.email}`);
+
+      if (requestConfig.protocol === 'sendgrid') {
+        // Test SendGrid API Key
+        const response = await fetch('https://api.sendgrid.com/v3/user/credits', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${requestConfig.password}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.ok) {
+          return new Response(JSON.stringify({ success: true, message: "SendGrid Connection Successful" }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        } else {
+          const error = await response.json();
+          return new Response(JSON.stringify({ success: false, error: error.errors?.[0]?.message || "Invalid API Key" }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+      }
+
       const imapConfig = getImapConfig(requestConfig.email, requestConfig.password, requestConfig.host, requestConfig.port);
-      
+
       try {
         const connection = await Imap.connect(imapConfig);
         await connection.openBox('INBOX');
         connection.end();
-        return new Response(JSON.stringify({ success: true, message: "IMAP Connection Successful" }), { 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        return new Response(JSON.stringify({ success: true, message: "IMAP Connection Successful" }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       } catch (err: any) {
         console.error("IMAP Connection Failed:", err);
-        return new Response(JSON.stringify({ success: false, error: err.message || "Connection refused" }), { 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        return new Response(JSON.stringify({ success: false, error: err.message || "Connection refused" }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
     }
@@ -94,18 +117,44 @@ serve(async (req) => {
     // --- ACTION: SEND EMAIL ---
     if (action === 'send') {
       const account = await getAccount(accountId);
-      
+
+      if (account.protocol === 'sendgrid') {
+        const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${account.auth_token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            personalizations: [{ to: [{ email: to }] }],
+            from: { email: account.email_address },
+            subject: subject,
+            content: [
+              { type: 'text/plain', value: content },
+              { type: 'text/html', value: content.replace(/\n/g, '<br>') }
+            ]
+          })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(`SendGrid Error: ${JSON.stringify(errorData)}`);
+        }
+
+        return new Response(JSON.stringify({ success: true, messageId: `sg-${Date.now()}` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
       // Heuristic for SMTP based on IMAP host
       let smtpHost = account.host.replace('imap.', 'smtp.');
       if (account.host.includes('outlook')) smtpHost = 'smtp.office365.com';
-      
+
       const transporter = nodemailer.createTransport({
         host: smtpHost,
         port: 587,
-        secure: false, 
+        secure: false,
         auth: {
           user: account.email_address,
-          pass: account.auth_token 
+          pass: account.auth_token
         }
       });
 
@@ -123,6 +172,12 @@ serve(async (req) => {
     // --- ACTION: SYNC (FETCH) EMAILS ---
     if (action === 'sync') {
       const account = await getAccount(accountId);
+
+      // Skip sync for SendGrid
+      if (account.protocol === 'sendgrid') {
+        return new Response(JSON.stringify({ success: true, count: 0 }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
       const imapConfig = getImapConfig(account.email_address, account.auth_token, account.host, account.port);
 
       let connection;
@@ -132,68 +187,68 @@ serve(async (req) => {
 
         // Fetch last 10 unseen messages or just last 10 messages if everything is seen
         const searchCriteria = ['UNSEEN'];
-        const fetchOptions = { 
+        const fetchOptions = {
           bodies: ['HEADER', 'TEXT', ''], // Empty string gets full body for parser
           markSeen: false, // Don't mark as read yet, let user do it in UI
-          struct: true 
+          struct: true
         };
-        
+
         const messages = await connection.search(searchCriteria, fetchOptions);
-        
+
         // Limit to 5 newest to prevent timeout in Edge Function
-        const recentMessages = messages.slice(-5); 
+        const recentMessages = messages.slice(-5);
 
         let count = 0;
         for (const item of recentMessages) {
           const allPart = item.parts.find((part: any) => part.which === '');
           const id = item.attributes.uid;
           const idHeader = "Imap-Id: " + id + "\r\n";
-          
-          if (allPart) {
-             const parsed = await simpleParser(allPart.body);
-             
-             // Check if email already exists to avoid duplicates
-             const { data: existing } = await supabaseClient
-                .from('emails')
-                .select('id')
-                .eq('remote_id', id.toString())
-                .eq('account_id', accountId)
-                .maybeSingle();
 
-             if (!existing) {
-                await supabaseClient.from('emails').insert({
-                  user_id: user.id,
-                  account_id: accountId,
-                  remote_id: id.toString(),
-                  from_address: parsed.from?.text || 'unknown',
-                  subject: parsed.subject || '(No Subject)',
-                  body_text: parsed.text || parsed.html || '(No Content)',
-                  received_at: parsed.date ? new Date(parsed.date).toISOString() : new Date().toISOString(),
-                  is_read: false
-                });
-                count++;
-             }
+          if (allPart) {
+            const parsed = await simpleParser(allPart.body);
+
+            // Check if email already exists to avoid duplicates
+            const { data: existing } = await supabaseClient
+              .from('emails')
+              .select('id')
+              .eq('remote_id', id.toString())
+              .eq('account_id', accountId)
+              .maybeSingle();
+
+            if (!existing) {
+              await supabaseClient.from('emails').insert({
+                user_id: user.id,
+                account_id: accountId,
+                remote_id: id.toString(),
+                from_address: parsed.from?.text || 'unknown',
+                subject: parsed.subject || '(No Subject)',
+                body_text: parsed.text || parsed.html || '(No Content)',
+                received_at: parsed.date ? new Date(parsed.date).toISOString() : new Date().toISOString(),
+                is_read: false
+              });
+              count++;
+            }
           }
         }
 
         connection.end();
-        
+
         // Update last sync status
-        await supabaseClient.from('email_accounts').update({ 
+        await supabaseClient.from('email_accounts').update({
           last_sync_at: new Date().toISOString(),
           status: 'connected',
-          last_error: null 
+          last_error: null
         }).eq('id', accountId);
 
         return new Response(JSON.stringify({ success: true, count }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
       } catch (connErr: any) {
         // Update account status to error
-        await supabaseClient.from('email_accounts').update({ 
+        await supabaseClient.from('email_accounts').update({
           status: 'error',
-          last_error: connErr.message 
+          last_error: connErr.message
         }).eq('id', accountId);
-        
+
         throw connErr;
       }
     }
