@@ -1,9 +1,9 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import nodemailer from "npm:nodemailer@6.9.7";
-import { simpleParser } from "npm:mailparser@3.6.5";
-// import { ImapFlow } from "npm:imapflow@1.0.150"; // Use dynamic import to catch boot errors
+
+// NOTE: All heavy NPM packages are dynamically imported to prevent boot-time crashes.
+// This ensures the function always starts and can report specific errors.
 
 declare const Deno: any;
 
@@ -39,29 +39,34 @@ const getImapConfig = (email: string, password: string, host?: string, port?: nu
 };
 
 serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
+    // initialize Supabase client
     const supabaseClient = createClient(
       (Deno as any).env.get('SUPABASE_URL') ?? '',
       (Deno as any).env.get('SUPABASE_ANON_KEY') ?? '',
       { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
     );
 
+    // Parse Body safely
     let body;
     try {
       body = await req.json();
     } catch (e) {
-      throw new Error('Invalid JSON body');
+      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const { action, accountId, to, subject, content, config: requestConfig } = body;
 
     // GET USER
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
-    if (userError || !user) throw new Error('Unauthorized');
+    if (userError || !user) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
     // HELPER: Get Account
     const getAccount = async (id: string) => {
@@ -75,6 +80,11 @@ serve(async (req) => {
       if (error || !data) throw new Error('Account not found');
       return data;
     };
+
+    // --- HEALTH CHECK --- (Useful for verifying deployment)
+    if (action === 'health') {
+      return new Response(JSON.stringify({ success: true, message: "Service is healthy" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
     // --- TEST CONNECTION ---
     if (action === 'test') {
@@ -100,6 +110,7 @@ serve(async (req) => {
       }
 
       try {
+        // DYNAMIC IMPORT: ImapFlow
         const { ImapFlow } = await import("npm:imapflow@1.0.150");
         const client = new ImapFlow(getImapConfig(requestConfig.email, requestConfig.password, requestConfig.host, requestConfig.port));
 
@@ -110,7 +121,7 @@ serve(async (req) => {
       } catch (err: any) {
         console.error("IMAP Connection Failed:", err);
         const errorMsg = err.message || "Connection failed";
-        // Check for common polyfill errors
+        // Check for common polyfill errors or Proton Bridge issues
         if (errorMsg.includes("process is not defined")) {
           return new Response(JSON.stringify({ success: false, error: "Runtime Error: Node.js compatibility issue (process undefined). Proton Mail Bridge cannot be accessed from cloud." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
@@ -151,6 +162,8 @@ serve(async (req) => {
         let smtpHost = account.host.replace('imap.', 'smtp.');
         if (account.host.includes('outlook')) smtpHost = 'smtp.office365.com';
 
+        // DYNAMIC IMPORT: Nodemailer
+        const nodemailer = await import("npm:nodemailer@6.9.7");
         const transporter = nodemailer.createTransport({
           host: smtpHost,
           port: 587,
@@ -181,7 +194,10 @@ serve(async (req) => {
         const account = await getAccount(accountId);
         if (account.protocol === 'sendgrid') return new Response(JSON.stringify({ success: true, count: 0 }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
+        // DYNAMIC IMPORTS: ImapFlow, Mailparser
         const { ImapFlow } = await import("npm:imapflow@1.0.150");
+        const { simpleParser } = await import("npm:mailparser@3.6.5");
+
         const client = new ImapFlow(getImapConfig(account.email_address, account.auth_token, account.host, account.port));
         let count = 0;
 
@@ -244,10 +260,10 @@ serve(async (req) => {
       }
     }
 
-    throw new Error('Invalid Action');
+    return new Response(JSON.stringify({ error: 'Invalid Action' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (err: any) {
-    console.error("Email Handler Error:", err);
+    console.error("Email Handler Critical Error:", err);
     return new Response(JSON.stringify({ error: err.message }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
