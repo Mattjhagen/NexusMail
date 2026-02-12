@@ -118,14 +118,41 @@ serve(async (req) => {
         await client.logout();
 
         return new Response(JSON.stringify({ success: true, message: "IMAP Connection Successful" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      } catch (err: any) {
-        console.error("IMAP Connection Failed:", err);
-        const errorMsg = err.message || "Connection failed";
-        // Check for common polyfill errors or Proton Bridge issues
-        if (errorMsg.includes("process is not defined")) {
-          return new Response(JSON.stringify({ success: false, error: "Runtime Error: Node.js compatibility issue (process undefined). Proton Mail Bridge cannot be accessed from cloud." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      } catch (imapErr: any) {
+        console.error("IMAP Connection Failed:", imapErr);
+
+        // FAILOVER TO SMTP (Send Only Support)
+        try {
+          const nodemailer = await import("npm:nodemailer@6.9.7");
+          // Heuristic: If user provided 'smtp.' host, use it. If 'imap.', replace with 'smtp.'.
+          let smtpHost = requestConfig.host;
+          if (smtpHost.startsWith('imap.')) smtpHost = smtpHost.replace('imap.', 'smtp.');
+
+          // If this is protonmail, it might be 'smtp.protonmail.ch' (which they likely entered manually if using bridge-like service or own domain)
+          // But usually Proton requires Bridge. If they are trying to direct connect to 'smtp.protonmail.ch', it might still fail without bridge.
+          // However, for other providers or if they DO have a valid SMTP endpoint, this allows verified "Send Only".
+
+          const transporter = nodemailer.createTransport({
+            host: smtpHost,
+            port: requestConfig.port === 993 ? 587 : requestConfig.port, // 993 is IMAP SSL, 587 is SMTP Submission
+            secure: false, // upgrades later with STARTTLS usually
+            auth: {
+              user: requestConfig.email,
+              pass: requestConfig.password
+            }
+          });
+
+          await transporter.verify();
+          return new Response(JSON.stringify({ success: true, message: "SMTP Connection Successful (Send Only)" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+        } catch (smtpErr: any) {
+          const errorMsg = imapErr.message || "Connection failed";
+          // Check for common polyfill errors or Proton Bridge issues
+          if (errorMsg.includes("process is not defined")) {
+            return new Response(JSON.stringify({ success: false, error: "Runtime Error: Node.js compatibility issue (process undefined)." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+          return new Response(JSON.stringify({ success: false, error: `IMAP: ${errorMsg} | SMTP: ${smtpErr.message}` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
-        return new Response(JSON.stringify({ success: false, error: errorMsg }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
 
@@ -159,14 +186,15 @@ serve(async (req) => {
           return new Response(JSON.stringify({ success: true, messageId: `sg-${Date.now()}` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
 
-        let smtpHost = account.host.replace('imap.', 'smtp.');
-        if (account.host.includes('outlook')) smtpHost = 'smtp.office365.com';
+        let smtpHost = account.host;
+        if (smtpHost.startsWith('imap.')) smtpHost = smtpHost.replace('imap.', 'smtp.');
+        if (smtpHost.includes('outlook') && !smtpHost.startsWith('smtp.')) smtpHost = 'smtp.office365.com';
 
         // DYNAMIC IMPORT: Nodemailer
         const nodemailer = await import("npm:nodemailer@6.9.7");
         const transporter = nodemailer.createTransport({
           host: smtpHost,
-          port: 587,
+          port: account.port === 993 ? 587 : account.port,
           secure: false,
           auth: {
             user: account.email_address,
@@ -193,6 +221,11 @@ serve(async (req) => {
       try {
         const account = await getAccount(accountId);
         if (account.protocol === 'sendgrid') return new Response(JSON.stringify({ success: true, count: 0 }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+        // Skip sync for SMTP-only hosts
+        if (account.host.startsWith('smtp.')) {
+          return new Response(JSON.stringify({ success: true, count: 0, message: "Sync skipped for SMTP host" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
 
         // DYNAMIC IMPORTS: ImapFlow, Mailparser
         const { ImapFlow } = await import("npm:imapflow@1.0.150");
