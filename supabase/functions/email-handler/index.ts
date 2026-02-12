@@ -3,7 +3,6 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 // NOTE: All heavy NPM packages are dynamically imported to prevent boot-time crashes.
-// This ensures the function always starts and can report specific errors.
 
 declare const Deno: any;
 
@@ -81,7 +80,7 @@ serve(async (req) => {
       return data;
     };
 
-    // --- HEALTH CHECK --- (Useful for verifying deployment)
+    // --- HEALTH CHECK --- 
     if (action === 'health') {
       return new Response(JSON.stringify({ success: true, message: "Service is healthy" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
@@ -110,16 +109,25 @@ serve(async (req) => {
       }
 
       try {
+        // Optimization: If host is clearly SMTP, skip IMAP entirely to avoid timeout
+        if (requestConfig.host && requestConfig.host.startsWith('smtp.')) {
+          throw new Error("Skipping IMAP check for SMTP host");
+        }
+
         // DYNAMIC IMPORT: ImapFlow
         const { ImapFlow } = await import("npm:imapflow@1.0.150");
         const client = new ImapFlow(getImapConfig(requestConfig.email, requestConfig.password, requestConfig.host, requestConfig.port));
 
-        await client.connect();
+        // Timeout wrapper for IMAP
+        const connectPromise = client.connect();
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("IMAP Connection Timeout (5s)")), 5000));
+
+        await Promise.race([connectPromise, timeoutPromise]);
         await client.logout();
 
         return new Response(JSON.stringify({ success: true, message: "IMAP Connection Successful" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       } catch (imapErr: any) {
-        console.error("IMAP Connection Failed:", imapErr);
+        console.error("IMAP Connection Failed or Skipped:", imapErr.message);
 
         // FAILOVER TO SMTP (Send Only Support)
         try {
@@ -127,10 +135,6 @@ serve(async (req) => {
           // Heuristic: If user provided 'smtp.' host, use it. If 'imap.', replace with 'smtp.'.
           let smtpHost = requestConfig.host;
           if (smtpHost.startsWith('imap.')) smtpHost = smtpHost.replace('imap.', 'smtp.');
-
-          // If this is protonmail, it might be 'smtp.protonmail.ch' (which they likely entered manually if using bridge-like service or own domain)
-          // But usually Proton requires Bridge. If they are trying to direct connect to 'smtp.protonmail.ch', it might still fail without bridge.
-          // However, for other providers or if they DO have a valid SMTP endpoint, this allows verified "Send Only".
 
           const transporter = nodemailer.createTransport({
             host: smtpHost,
@@ -142,15 +146,20 @@ serve(async (req) => {
             }
           });
 
-          await transporter.verify();
+          // Timeout wrapper for SMTP
+          const verifyPromise = transporter.verify();
+          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("SMTP Connection Timeout (5s)")), 5000));
+
+          await Promise.race([verifyPromise, timeoutPromise]);
+
           return new Response(JSON.stringify({ success: true, message: "SMTP Connection Successful (Send Only)" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
         } catch (smtpErr: any) {
           const errorMsg = imapErr.message || "Connection failed";
-          // Check for common polyfill errors or Proton Bridge issues
           if (errorMsg.includes("process is not defined")) {
-            return new Response(JSON.stringify({ success: false, error: "Runtime Error: Node.js compatibility issue (process undefined)." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+            return new Response(JSON.stringify({ success: false, error: "Runtime Error: Node.js compatibility." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
           }
+          // Return detailed error
           return new Response(JSON.stringify({ success: false, error: `IMAP: ${errorMsg} | SMTP: ${smtpErr.message}` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
