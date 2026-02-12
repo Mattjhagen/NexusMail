@@ -73,95 +73,105 @@ serve(async (req) => {
     // --- TEST CONNECTION ---
     if (action === 'test') {
       if (requestConfig.protocol === 'sendgrid') {
-        const response = await fetch('https://api.sendgrid.com/v3/user/credits', {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${requestConfig.password}`,
-            'Content-Type': 'application/json'
-          }
-        });
+        try {
+          const response = await fetch('https://api.sendgrid.com/v3/user/credits', {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${requestConfig.password}`,
+              'Content-Type': 'application/json'
+            }
+          });
 
-        if (response.ok) {
-          return new Response(JSON.stringify({ success: true, message: "SendGrid Connection Successful" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-        } else {
-          const error = await response.json();
-          return new Response(JSON.stringify({ success: false, error: error.errors?.[0]?.message || "Invalid API Key" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          if (response.ok) {
+            return new Response(JSON.stringify({ success: true, message: "SendGrid Connection Successful" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          } else {
+            const error = await response.json();
+            return new Response(JSON.stringify({ success: false, error: error.errors?.[0]?.message || "Invalid API Key" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+        } catch (err: any) {
+          return new Response(JSON.stringify({ success: false, error: `SendGrid check failed: ${err.message}` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
 
-      const client = new ImapFlow(getImapConfig(requestConfig.email, requestConfig.password, requestConfig.host, requestConfig.port));
-
       try {
+        const client = new ImapFlow(getImapConfig(requestConfig.email, requestConfig.password, requestConfig.host, requestConfig.port));
+
         await client.connect();
         await client.logout();
+
         return new Response(JSON.stringify({ success: true, message: "IMAP Connection Successful" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       } catch (err: any) {
+        console.error("IMAP Connection Failed:", err);
         return new Response(JSON.stringify({ success: false, error: err.message || "Connection failed" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
 
     // --- SEND EMAIL ---
     if (action === 'send') {
-      const account = await getAccount(accountId);
+      try {
+        const account = await getAccount(accountId);
 
-      if (account.protocol === 'sendgrid') {
-        const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${account.auth_token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            personalizations: [{ to: [{ email: to }] }],
-            from: { email: account.email_address },
-            subject: subject,
-            content: [
-              { type: 'text/plain', value: content },
-              { type: 'text/html', value: content.replace(/\n/g, '<br>') }
-            ]
-          })
+        if (account.protocol === 'sendgrid') {
+          const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${account.auth_token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              personalizations: [{ to: [{ email: to }] }],
+              from: { email: account.email_address },
+              subject: subject,
+              content: [
+                { type: 'text/plain', value: content },
+                { type: 'text/html', value: content.replace(/\n/g, '<br>') }
+              ]
+            })
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`SendGrid Error: ${JSON.stringify(errorData)}`);
+          }
+          return new Response(JSON.stringify({ success: true, messageId: `sg-${Date.now()}` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+
+        let smtpHost = account.host.replace('imap.', 'smtp.');
+        if (account.host.includes('outlook')) smtpHost = 'smtp.office365.com';
+
+        const transporter = nodemailer.createTransport({
+          host: smtpHost,
+          port: 587,
+          secure: false,
+          auth: {
+            user: account.email_address,
+            pass: account.auth_token
+          }
         });
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(`SendGrid Error: ${JSON.stringify(errorData)}`);
-        }
-        return new Response(JSON.stringify({ success: true, messageId: `sg-${Date.now()}` }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        const info = await transporter.sendMail({
+          from: account.email_address,
+          to: to,
+          subject: subject,
+          text: content,
+          html: content.replace(/\n/g, '<br>')
+        });
+
+        return new Response(JSON.stringify({ success: true, messageId: info.messageId }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      } catch (err: any) {
+        return new Response(JSON.stringify({ success: false, error: err.message || "Send failed" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
-
-      let smtpHost = account.host.replace('imap.', 'smtp.');
-      if (account.host.includes('outlook')) smtpHost = 'smtp.office365.com';
-
-      const transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: 587,
-        secure: false,
-        auth: {
-          user: account.email_address,
-          pass: account.auth_token
-        }
-      });
-
-      const info = await transporter.sendMail({
-        from: account.email_address,
-        to: to,
-        subject: subject,
-        text: content,
-        html: content.replace(/\n/g, '<br>')
-      });
-
-      return new Response(JSON.stringify({ success: true, messageId: info.messageId }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // --- SYNC EMAILS ---
     if (action === 'sync') {
-      const account = await getAccount(accountId);
-      if (account.protocol === 'sendgrid') return new Response(JSON.stringify({ success: true, count: 0 }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-
-      const client = new ImapFlow(getImapConfig(account.email_address, account.auth_token, account.host, account.port));
-      let count = 0;
-
       try {
+        const account = await getAccount(accountId);
+        if (account.protocol === 'sendgrid') return new Response(JSON.stringify({ success: true, count: 0 }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+        const client = new ImapFlow(getImapConfig(account.email_address, account.auth_token, account.host, account.port));
+        let count = 0;
+
         await client.connect();
         const lock = await client.getMailboxLock('INBOX');
         try {
@@ -169,7 +179,7 @@ serve(async (req) => {
           // imapflow fetch returns an async generator
           for await (const message of client.fetch('1:*', { envelope: true, source: true, uid: true }, { value: 5, strategy: 'newest' })) {
             const parsed = await simpleParser(message.source);
-            
+
             // Check existence
             const { data: existing } = await supabaseClient
               .from('emails')
@@ -206,11 +216,22 @@ serve(async (req) => {
         return new Response(JSON.stringify({ success: true, count }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
       } catch (err: any) {
-        await supabaseClient.from('email_accounts').update({
-          status: 'error',
-          last_error: err.message
-        }).eq('id', accountId);
-        throw err;
+        // Update account status to error
+        try {
+          // Use a new client instance or rely on existing one if we haven't crashed? 
+          // Actually if we caught error here, we might not be able to update DB easily if Supabase client failed? 
+          // But supabaseClient is likely fine.
+          // We need checking if accountId is defined (it should be if we reached here)
+          if (typeof accountId === 'string') {
+            await supabaseClient.from('email_accounts').update({
+              status: 'error',
+              last_error: err.message
+            }).eq('id', accountId);
+          }
+        } catch (dbErr) { console.error("Failed to update account error status:", dbErr); }
+
+        console.error("Sync Failed:", err);
+        return new Response(JSON.stringify({ success: false, error: err.message || "Sync failed" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
 
