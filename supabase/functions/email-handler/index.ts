@@ -1,10 +1,9 @@
 
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import nodemailer from "npm:nodemailer@6.9.7";
-import { ImapFlow } from "npm:imapflow@1.0.150";
 import { simpleParser } from "npm:mailparser@3.6.5";
+// import { ImapFlow } from "npm:imapflow@1.0.150"; // Use dynamic import to catch boot errors
 
 declare const Deno: any;
 
@@ -51,7 +50,14 @@ serve(async (req) => {
       { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
     );
 
-    const { action, accountId, to, subject, content, config: requestConfig } = await req.json();
+    let body;
+    try {
+      body = await req.json();
+    } catch (e) {
+      throw new Error('Invalid JSON body');
+    }
+
+    const { action, accountId, to, subject, content, config: requestConfig } = body;
 
     // GET USER
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser();
@@ -94,6 +100,7 @@ serve(async (req) => {
       }
 
       try {
+        const { ImapFlow } = await import("npm:imapflow@1.0.150");
         const client = new ImapFlow(getImapConfig(requestConfig.email, requestConfig.password, requestConfig.host, requestConfig.port));
 
         await client.connect();
@@ -102,7 +109,12 @@ serve(async (req) => {
         return new Response(JSON.stringify({ success: true, message: "IMAP Connection Successful" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       } catch (err: any) {
         console.error("IMAP Connection Failed:", err);
-        return new Response(JSON.stringify({ success: false, error: err.message || "Connection failed" }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        const errorMsg = err.message || "Connection failed";
+        // Check for common polyfill errors
+        if (errorMsg.includes("process is not defined")) {
+          return new Response(JSON.stringify({ success: false, error: "Runtime Error: Node.js compatibility issue (process undefined). Proton Mail Bridge cannot be accessed from cloud." }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ success: false, error: errorMsg }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     }
 
@@ -169,6 +181,7 @@ serve(async (req) => {
         const account = await getAccount(accountId);
         if (account.protocol === 'sendgrid') return new Response(JSON.stringify({ success: true, count: 0 }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
+        const { ImapFlow } = await import("npm:imapflow@1.0.150");
         const client = new ImapFlow(getImapConfig(account.email_address, account.auth_token, account.host, account.port));
         let count = 0;
 
@@ -218,10 +231,6 @@ serve(async (req) => {
       } catch (err: any) {
         // Update account status to error
         try {
-          // Use a new client instance or rely on existing one if we haven't crashed? 
-          // Actually if we caught error here, we might not be able to update DB easily if Supabase client failed? 
-          // But supabaseClient is likely fine.
-          // We need checking if accountId is defined (it should be if we reached here)
           if (typeof accountId === 'string') {
             await supabaseClient.from('email_accounts').update({
               status: 'error',
@@ -239,7 +248,6 @@ serve(async (req) => {
 
   } catch (err: any) {
     console.error("Email Handler Error:", err);
-    return new Response(JSON.stringify({ error: err.message }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ error: err.message }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
-
